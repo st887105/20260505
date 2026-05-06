@@ -302,32 +302,6 @@
         }
     }
 
-    // ── 確認「我修的課」狀態 ─────────────────────
-    async function checkMyCourses() {
-        log('📋 前往「我修的課」確認...', '#60a5fa');
-        setStatus('確認課程狀態...', '#60a5fa');
-
-        // 點右上角選單
-        const menuBtn = document.querySelector(
-            '.user-menu, [class*="avatar"], [class*="user-btn"], ' +
-            'button[class*="menu"], [aria-label*="menu"]'
-        );
-        if (menuBtn) { menuBtn.click(); await sleep(1000); }
-
-        // 找「我修的課」連結
-        const myCoursesLink = [...document.querySelectorAll('a,[role="menuitem"]')]
-            .find(el => /我修的課/.test(el.textContent));
-        if (myCoursesLink) {
-            myCoursesLink.click();
-            await sleep(3000);
-            log('✅ 已跳到「我修的課」，請確認狀態', '#22c55e');
-        } else {
-            // 直接導向
-            window.location.href = 'https://moocs.moe.edu.tw/moocs/#/my-course';
-            await sleep(3000);
-        }
-    }
-
     // ── 主流程 ───────────────────────────────────
     log('▶ 開始執行 v5.1', '#4f8ef7');
     log('🛡️ 防閒置已啟動', '#22c55e');
@@ -385,13 +359,12 @@
         await postDiscussion();
         await sleep(2000);
 
-        // 確認「我修的課」
-        await checkMyCourses();
-
         clearInterval(aliveTimer);
         setStatus('🎉 全部完成！', '#22c55e');
         setAlive('🔵 防閒置：已結束', '#60a5fa');
-        log('\n🎉 全部完成！請確認「我修的課」狀態', '#22c55e');
+        log('\n🎉 全部完成！', '#22c55e');
+        log('📋 請手動前往「我修的課」確認狀態', '#60a5fa');
+        log('🔗 https://moocs.moe.edu.tw/moocs/#/my-course', '#4f8ef7');
     } else {
         clearInterval(aliveTimer);
         setStatus('已停止', '#ef4444');
