@@ -1,48 +1,48 @@
-// MOOCS v8.0 - 最終版：確認說明頁載入機制
+// MOOCS v8.1 - 修正版：直接偵測說明頁 UI，不依賴 qti-detail API
 (async function () {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     let KEY = localStorage.getItem('moocs_claude_key');
     if (!KEY) { KEY = prompt('Claude API Key：'); if (!KEY) return; localStorage.setItem('moocs_claude_key', KEY); }
 
-    document.getElementById('moocs-v80')?.remove();
+    document.getElementById('moocs-v81')?.remove();
     const panel = document.createElement('div');
-    panel.id = 'moocs-v80';
+    panel.id = 'moocs-v81';
     panel.style.cssText = 'position:fixed;top:80px;left:20px;width:340px;z-index:999999;background:#13151f;color:#e2e8f0;border-radius:14px;font-family:monospace;font-size:12px;box-shadow:0 8px 32px rgba(0,0,0,.8);border:1px solid #2a2d3e;overflow:hidden';
     panel.innerHTML = `
-        <div id="mv80-hdr" style="background:linear-gradient(135deg,#1e2130,#252840);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:move;border-bottom:1px solid #2a2d3e">
-            <span style="font-weight:bold;color:#4f8ef7">🎓 MOOCS v8.0 ✅</span>
-            <span id="mv80-close" style="cursor:pointer;opacity:.5">✕</span>
+        <div id="mv81-hdr" style="background:linear-gradient(135deg,#1e2130,#252840);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:move;border-bottom:1px solid #2a2d3e">
+            <span style="font-weight:bold;color:#4f8ef7">🎓 MOOCS v8.1 ✅</span>
+            <span id="mv81-close" style="cursor:pointer;opacity:.5">✕</span>
         </div>
-        <div id="mv80-status" style="padding:6px 14px;font-size:11px;color:#64748b;background:#0f1117;border-bottom:1px solid #1a1d27">等待操作</div>
-        <div id="mv80-timer" style="padding:3px 14px;font-size:10px;color:#22c55e;background:#0a0f0a;border-bottom:1px solid #1a1d27">⏳ 等待</div>
-        <div style="background:#0a0c14"><div id="mv80-log" style="max-height:260px;overflow-y:auto;padding:4px 14px"></div></div>
+        <div id="mv81-status" style="padding:6px 14px;font-size:11px;color:#64748b;background:#0f1117;border-bottom:1px solid #1a1d27">等待操作</div>
+        <div id="mv81-timer" style="padding:3px 14px;font-size:10px;color:#22c55e;background:#0a0f0a;border-bottom:1px solid #1a1d27">⏳ 等待</div>
+        <div style="background:#0a0c14"><div id="mv81-log" style="max-height:260px;overflow-y:auto;padding:4px 14px"></div></div>
         <div style="padding:10px 14px;border-top:1px solid #1a1d27;display:flex;gap:6px">
-            <button id="mv80-auto" style="flex:1;padding:8px;background:#1a3a1a;color:#22c55e;border:none;border-radius:7px;cursor:pointer;font-size:11px">🚀 全自動測驗</button>
-            <button id="mv80-now" style="flex:1;padding:8px;background:#2a1a3a;color:#a78bfa;border:none;border-radius:7px;cursor:pointer;font-size:11px">📝 現在答題</button>
-            <button id="mv80-stop" style="padding:8px 10px;background:#3d1a1a;color:#ef4444;border:none;border-radius:7px;cursor:pointer">⏹</button>
+            <button id="mv81-auto" style="flex:1;padding:8px;background:#1a3a1a;color:#22c55e;border:none;border-radius:7px;cursor:pointer;font-size:11px">🚀 全自動測驗</button>
+            <button id="mv81-now" style="flex:1;padding:8px;background:#2a1a3a;color:#a78bfa;border:none;border-radius:7px;cursor:pointer;font-size:11px">📝 現在答題</button>
+            <button id="mv81-stop" style="padding:8px 10px;background:#3d1a1a;color:#ef4444;border:none;border-radius:7px;cursor:pointer">⏹</button>
         </div>`;
     document.body.appendChild(panel);
 
     let stopped = false;
-    document.getElementById('mv80-close').onclick = () => panel.remove();
-    document.getElementById('mv80-stop').onclick = () => { stopped = true; log('⏹ 停止', '#f59e0b'); };
-    document.getElementById('mv80-auto').onclick = () => { stopped = false; runAll(); };
-    document.getElementById('mv80-now').onclick = () => { stopped = false; doQuizFromInfoPage('手動'); };
+    document.getElementById('mv81-close').onclick = () => panel.remove();
+    document.getElementById('mv81-stop').onclick = () => { stopped = true; log('⏹ 停止', '#f59e0b'); };
+    document.getElementById('mv81-auto').onclick = () => { stopped = false; runAll(); };
+    document.getElementById('mv81-now').onclick = () => { stopped = false; doQuizFromInfoPage('手動'); };
 
     let drag=false,ox,oy;
-    document.getElementById('mv80-hdr').onmousedown=e=>{drag=true;ox=e.clientX-panel.offsetLeft;oy=e.clientY-panel.offsetTop;};
+    document.getElementById('mv81-hdr').onmousedown=e=>{drag=true;ox=e.clientX-panel.offsetLeft;oy=e.clientY-panel.offsetTop;};
     document.onmousemove=e=>{if(!drag)return;panel.style.left=(e.clientX-ox)+'px';panel.style.top=(e.clientY-oy)+'px';panel.style.right='auto';panel.style.bottom='auto';};
     document.onmouseup=()=>drag=false;
 
     function log(msg,c='#94a3b8'){
-        const el=document.getElementById('mv80-log');if(!el)return;
+        const el=document.getElementById('mv81-log');if(!el)return;
         const t=new Date().toLocaleTimeString('zh-TW');
         el.innerHTML+=`<div style="color:${c};line-height:1.8"><span style="color:#334155">[${t}]</span> ${msg}</div>`;
         el.scrollTop=el.scrollHeight;
     }
-    function setStatus(msg,c='#64748b'){const e=document.getElementById('mv80-status');if(e){e.textContent=msg;e.style.color=c;}}
-    function setTimer(msg,c='#22c55e'){const e=document.getElementById('mv80-timer');if(e){e.textContent=msg;e.style.color=c;}}
+    function setStatus(msg,c='#64748b'){const e=document.getElementById('mv81-status');if(e){e.textContent=msg;e.style.color=c;}}
+    function setTimer(msg,c='#22c55e'){const e=document.getElementById('mv81-timer');if(e){e.textContent=msg;e.style.color=c;}}
 
     function startCountdown(label,sec){
         let r=sec; setTimer(`⏱ ${label}：${r}秒`,'#22c55e');
@@ -50,23 +50,37 @@
         return tid;
     }
 
-    // ── 等待 /qti-detail 請求（說明頁載入的訊號）
-    function waitForQtiDetail(timeoutMs=15000){
-        return new Promise(resolve=>{
-            let done=false;
-            const orig=window.fetch;
-            const timer=setTimeout(()=>{if(!done){done=true;window.fetch=orig;resolve('timeout');}},timeoutMs);
-            window.fetch=async function(...args){
-                const url=args[0]?.toString()||'';
-                const p=orig.apply(this,args);
-                if(/qti-detail|quiz-detail|exam-detail/.test(url)&&!done){
-                    done=true;clearTimeout(timer);window.fetch=orig;
-                    log('  ✅ 說明頁 API 觸發（qti-detail）','#22c55e');
-                    setTimeout(resolve,800,'ok');
-                }
-                return p;
-            };
-        });
+    // ══════════════════════════════════════════════
+    // 核心修正：直接偵測說明頁是否已出現
+    // 說明頁特徵：有「進入測驗」按鈕 + 有「總題數」或「測驗時間」文字
+    // ══════════════════════════════════════════════
+    function isInfoPageVisible(){
+        // 方法1：尋找說明頁特有的「進入測驗」大按鈕（非右側欄位）
+        const btns = [...document.querySelectorAll('button,a')]
+            .filter(b => {
+                if(b.closest('#moocs-v81')) return false;
+                if(!b.offsetParent) return false;
+                const txt = b.textContent?.trim() || '';
+                return /^進入測驗$|^開始測驗$/.test(txt);
+            });
+        if(btns.length === 0) return false;
+
+        // 方法2：確認頁面有說明頁的資訊（總題數、測驗時間等）
+        const bodyText = document.body.innerText || '';
+        const hasInfo = /總題數|測驗時間|通過標準|測驗次數/.test(bodyText);
+
+        return btns.length > 0 && hasInfo;
+    }
+
+    // 等待說明頁出現（最多等 timeoutMs 毫秒）
+    async function waitForInfoPage(timeoutMs=15000){
+        const maxTries = timeoutMs / 300;
+        for(let i=0; i<maxTries; i++){
+            if(stopped) return 'stopped';
+            if(isInfoPageVisible()) return 'ok';
+            await sleep(300);
+        }
+        return 'timeout';
     }
 
     // ── Claude ───────────────────────────────────
@@ -91,7 +105,7 @@
     function findRightArrow(){
         return [...document.querySelectorAll('button,[role="button"]')]
             .find(el=>{
-                if(el.closest('#moocs-v80'))return false;
+                if(el.closest('#moocs-v81'))return false;
                 const r=el.getBoundingClientRect();
                 return r.right>=innerWidth-300&&r.right<=innerWidth-50
                     &&r.top>200&&r.top<innerHeight-100&&r.width>0&&r.width<100;
@@ -100,18 +114,14 @@
 
     // ══════════════════════════════════════════════
     // 找說明頁的「進入測驗」大按鈕
-    // 關鍵：說明頁在主內容區（左半部），按鈕 x < innerWidth-500
     // ══════════════════════════════════════════════
     function findInfoPageEnterBtn(){
-        const mainLimit = innerWidth - 500; // 右側欄大約500px
         const all = [...document.querySelectorAll('button,a')]
             .filter(b=>{
-                if(b.closest('#moocs-v80'))return false;
+                if(b.closest('#moocs-v81'))return false;
                 if(!b.offsetParent)return false;
                 const txt=b.textContent?.trim()||'';
-                if(!/^進入測驗$|^開始測驗$/.test(txt))return false;
-                const r=b.getBoundingClientRect();
-                return r.left < mainLimit && r.width > 60;
+                return /^進入測驗$|^開始測驗$/.test(txt);
             });
         if(!all.length)return null;
         // 選最寬的（主內容大按鈕）
@@ -128,20 +138,19 @@
         log(`\n📝「${name}」第${attempt}次`,'#a78bfa');
         setStatus(`測驗：${name}（${attempt}次）`,'#a78bfa');
 
-        // 現在應該在說明頁，找進入測驗按鈕
-        // 最多等 15 秒讓說明頁完整渲染
+        // 等說明頁出現
         let enterBtn=null;
-        const tid=startCountdown('等說明頁按鈕',15);
-        for(let t=0;t<30;t++){
+        const tid=startCountdown('等說明頁',15);
+        for(let t=0;t<50;t++){
             enterBtn=findInfoPageEnterBtn();
             if(enterBtn)break;
-            await sleep(500);
+            await sleep(300);
         }
         clearInterval(tid);
 
         if(!enterBtn){
-            log('  ❌ 主內容區找不到進入測驗','#ef4444');
-            // 診斷：印出所有進入測驗按鈕
+            log('  ❌ 找不到進入測驗按鈕','#ef4444');
+            // 診斷
             [...document.querySelectorAll('button,a')]
                 .filter(b=>/進入測驗|開始測驗/.test(b.textContent)&&b.offsetParent)
                 .forEach(b=>{
@@ -197,12 +206,12 @@
 
             // 送出
             const sub=[...document.querySelectorAll('button')]
-                .find(b=>/^(送出|提交|繳交)$/.test(b.textContent?.trim())&&!b.disabled&&b.offsetParent&&!b.closest('#moocs-v80'));
+                .find(b=>/^(送出|提交|繳交)$/.test(b.textContent?.trim())&&!b.disabled&&b.offsetParent&&!b.closest('#moocs-v81'));
             if(sub){await sleep(400);sub.click();log('  📤 送出！','#22c55e');await sleep(4000);break;}
 
             // 下一題
             const nxt=[...document.querySelectorAll('button')]
-                .find(b=>/^下一題$|^下一$/.test(b.textContent?.trim())&&b.offsetParent&&!b.closest('#moocs-v80'));
+                .find(b=>/^下一題$|^下一$/.test(b.textContent?.trim())&&b.offsetParent&&!b.closest('#moocs-v81'));
             if(nxt){nxt.click();await sleep(1800);continue;}
 
             // 箭頭
@@ -215,7 +224,7 @@
         // 完成測驗
         await sleep(2000);
         const done=[...document.querySelectorAll('button,a')]
-            .find(b=>b.textContent?.trim()==='完成測驗'&&b.offsetParent&&!b.closest('#moocs-v80'));
+            .find(b=>b.textContent?.trim()==='完成測驗'&&b.offsetParent&&!b.closest('#moocs-v81'));
         if(done){done.click();log('  📋 完成測驗','#60a5fa');await sleep(3000);}
 
         // 判斷通過
@@ -225,7 +234,6 @@
         if(retest){
             log(`  ⚠️ 未達標，重測`,'#f59e0b');
             retest.click();await sleep(2500);
-            // 重測時說明頁會再次出現
             await sleep(2000);
             return doQuizFromInfoPage(name,attempt+1);
         }
@@ -236,7 +244,7 @@
     }
 
     // ══════════════════════════════════════════════
-    // 全自動：點未測驗 → 等 qti-detail → 答題
+    // 全自動：點未測驗 → 等說明頁 UI → 答題
     // ══════════════════════════════════════════════
     async function runAll(){
         log('\n🚀 全自動開始','#4f8ef7');
@@ -279,25 +287,24 @@
             log(`\n🎯 [${round}]「${gName}」(第${cnt+1}次)`,'#60a5fa');
             setStatus(`點擊：${gName}`,'#a78bfa');
 
-            // 設攔截，等 qti-detail
-            const qtiPromise=waitForQtiDetail(12000);
-
             btn.scrollIntoView({behavior:'smooth',block:'center'});
             await sleep(500);
             btn.click();
 
-            // 等說明頁 API
-            log('  ⏳ 等待說明頁載入（qti-detail）...','#475569');
-            const qtiResult=await qtiPromise;
-            log(`  說明頁狀態：${qtiResult}`,'#475569');
+            // ★ 核心修正：直接等說明頁 UI 出現，不依賴 qti-detail API
+            log('  ⏳ 等待說明頁出現...','#475569');
+            const tid2=startCountdown('等說明頁',15);
+            const infoResult = await waitForInfoPage(15000);
+            clearInterval(tid2);
 
-            if(qtiResult==='timeout'){
-                log('  ⚠️ 說明頁未觸發，跳過','#f59e0b');
+            if(infoResult === 'stopped') break;
+            if(infoResult === 'timeout'){
+                log('  ⚠️ 說明頁未出現（15秒），跳過','#f59e0b');
                 continue;
             }
 
-            // 說明頁 API 已觸發，等 UI 渲染
-            await sleep(1500);
+            log('  ✅ 說明頁已出現','#22c55e');
+            await sleep(500);
 
             const result=await doQuizFromInfoPage(gName);
             log(`  結果：${result}`,result==='passed'?'#22c55e':'#f59e0b');
@@ -307,7 +314,7 @@
         }
     }
 
-    log('✅ v8.0 就緒','#4f8ef7');
+    log('✅ v8.1 就緒（說明頁 UI 偵測版）','#4f8ef7');
     log('━━━ 操作 ━━━','#334155');
     log('【🚀 全自動測驗】掃描所有未測驗自動跑','#60a5fa');
     log('【📝 現在答題】在說明頁時直接點此答題','#60a5fa');
