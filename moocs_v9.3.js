@@ -1,6 +1,6 @@
-// MOOCS v9.2 - 架構修正：說明頁不存在，點連結直接進作答頁
+// MOOCS v9.3 - 架構修正：說明頁不存在，點連結直接進作答頁
 // v9.1 問題：waitForInfoPage 一直等說明頁，但說明頁根本不會出現
-// v9.2 修正：點連結 → 直接等 div.question-wrap 出現 → 答題
+// v9.3 修正：點連結 → 直接等 div.question-wrap 出現 → 答題
 (async function () {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -25,7 +25,7 @@
             const sG=localStorage.getItem('moocs_gemini_key')||'';
             const sC=localStorage.getItem('moocs_claude_key')||'';
             overlay.innerHTML=`<div style="background:#13151f;border:1px solid #2a2d3e;border-radius:16px;padding:28px 32px;width:480px;max-width:95vw;color:#e2e8f0;font-family:monospace">
-              <div style="font-size:16px;font-weight:bold;color:#4f8ef7;margin-bottom:18px">🎓 MOOCS v9.2 ─ AI 引擎設定</div>
+              <div style="font-size:16px;font-weight:bold;color:#4f8ef7;margin-bottom:18px">🎓 MOOCS v9.3 ─ AI 引擎設定</div>
               <div style="margin-bottom:16px"><div style="font-size:11px;color:#64748b;margin-bottom:8px">選擇 AI 引擎</div>
               <div style="display:flex;gap:10px">
                 <label id="lbl-g" style="flex:1;border:2px solid #22c55e;border-radius:10px;padding:12px;cursor:pointer;background:#0a1f0a;text-align:center">
@@ -79,7 +79,7 @@
     const el2=AI_ENGINE==='gemini'?'<span style="color:#22c55e">🌟 Gemini</span>':'<span style="color:#a78bfa">🤖 Claude</span>';
     panel.innerHTML=`
         <div id="mv90-hdr" style="background:linear-gradient(135deg,#1e2130,#252840);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:move;border-bottom:1px solid #2a2d3e">
-            <span style="font-weight:bold;color:#4f8ef7">🎓 MOOCS v9.2 ${el2}</span>
+            <span style="font-weight:bold;color:#4f8ef7">🎓 MOOCS v9.3 ${el2}</span>
             <div style="display:flex;gap:8px;align-items:center">
                 <span id="mv90-cfg" style="cursor:pointer;font-size:10px;color:#64748b;border:1px solid #2a2d3e;padding:2px 6px;border-radius:4px">⚙️ 切換引擎</span>
                 <span id="mv90-close" style="cursor:pointer;opacity:.5">✕</span>
@@ -105,7 +105,7 @@
         const r=await showSetupDialog();
         if(r){AI_ENGINE=r.engine;GEMINI_KEY=r.geminiKey;CLAUDE_KEY=r.claudeKey;
             localStorage.setItem('moocs_ai_engine',AI_ENGINE);localStorage.setItem('moocs_gemini_key',GEMINI_KEY);localStorage.setItem('moocs_claude_key',CLAUDE_KEY);
-            panel.querySelector('#mv90-hdr span').innerHTML='🎓 MOOCS v9.2 '+(AI_ENGINE==='gemini'?'<span style="color:#22c55e">🌟 Gemini</span>':'<span style="color:#a78bfa">🤖 Claude</span>');
+            panel.querySelector('#mv90-hdr span').innerHTML='🎓 MOOCS v9.3 '+(AI_ENGINE==='gemini'?'<span style="color:#22c55e">🌟 Gemini</span>':'<span style="color:#a78bfa">🤖 Claude</span>');
             log('✅ 已切換至 '+AI_ENGINE,'#4f8ef7');}
     };
     let drag=false,ox,oy;
@@ -128,14 +128,40 @@
     }
 
     // ── Selector 工具（全部已用瀏覽器 debug 確認）──
+    // ✅ v9.3 修正：說明頁按鈕真實 class = button.qs-btn.qs-btn--primary
+    function findEnterBtn(){
+        // 策略1：真實 class（MutationObserver 實測確認）
+        const b = document.querySelector('button.qs-btn.qs-btn--primary, button.qs-btn--primary');
+        if(b&&b.offsetWidth>0&&!b.closest('#moocs-v90'))return b;
+        // 策略2：備援 — 任何含「進入測驗/開始測驗」且可見的按鈕
+        return [...document.querySelectorAll('button')]
+            .find(b=>/進入測驗|開始測驗/.test(b.textContent?.trim())&&b.offsetWidth>0&&!b.closest('#moocs-v90'))||null;
+    }
     // 作答頁偵測
     function isAnswerPageVisible(){
         const w=document.querySelector('div.question-wrap');
         return !!(w&&w.offsetParent);
     }
-    async function waitForAnswerPage(ms=12000){
+    // 說明頁偵測
+    function isInfoPageVisible(){
+        return !!findEnterBtn();
+    }
+    // 等說明頁或作答頁，若說明頁出現就自動點「進入測驗」
+    async function waitForAnswerPage(ms=15000){
         for(let i=0;i<ms/300;i++){
             if(stopped)return'stopped';
+            // 說明頁出現：自動點進入測驗
+            const enterBtn=findEnterBtn();
+            if(enterBtn){
+                log('  📋 說明頁出現，點進入測驗','#22c55e');
+                enterBtn.click();
+                await sleep(2000);
+                // 等作答頁
+                for(let j=0;j<30;j++){
+                    if(isAnswerPageVisible())return'ok';
+                    await sleep(300);
+                }
+            }
             if(isAnswerPageVisible())return'ok';
             await sleep(300);
         }
@@ -313,9 +339,9 @@
     }
 
     const eStr=AI_ENGINE==='gemini'?'🌟 Gemini 2.0 Flash':'🤖 Claude Haiku';
-    log(`✅ v9.2 就緒｜引擎：${eStr}`,'#4f8ef7');
+    log(`✅ v9.3 就緒｜引擎：${eStr}`,'#4f8ef7');
     log('【🚀 全自動測驗】掃描所有未測驗並自動答題','#60a5fa');
     log('【📝 現在答題】對當前作答頁直接答題','#60a5fa');
-    log('v9.2 修正：說明頁不存在，直接等作答頁','#334155');
+    log('v9.3 修正：說明頁不存在，直接等作答頁','#334155');
     setStatus('請選擇操作','#60a5fa');
 })();
