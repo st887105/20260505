@@ -209,7 +209,7 @@
         const isYN=type?.includes('是非');
         const prompt=isYN?`台灣教育訓練是非題，只回答0（正確）或1（錯誤），不要解釋：\n${q}`:`台灣教育訓練單選題，選最正確答案，只回答數字（從0開始），不要解釋：\n題目：${q}\n選項：\n${opts_text}`;
         try{
-            const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:10,temperature:0}})});
+            const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:10,temperature:0}})});
             if(res.status===429){const w=[20,40,80][retry]||80;log(`  ⚠️ Gemini 429，等${w}s`,'#f59e0b');await sleep(w*1000);return askGemini(q,opts_text,type,retry+1);}
             const data=await res.json();const parts=data?.candidates?.[0]?.content?.parts;
             return(parts?parts[parts.length-1]?.text?.trim():'')?.match(/\d/)?.[0]||'0';
