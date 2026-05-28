@@ -1,15 +1,21 @@
-// MOOCS v9.0 - 雙 AI 引擎（Gemini / Claude）+ 可行性全面修正
+// MOOCS v9.0 - 雙 AI 引擎（Gemini / Claude）+ Selector 全面修正
+// 修正記錄 v9.1：
+//   1. isInfoPageVisible()    → 改用 moocs-question-set 偵測說明頁狀態
+//   2. findInfoPageEnterBtn() → 改用 .fill-button（真實 class）
+//   3. findNextBtn()          → 改用 button.btn-control.--right（真實 class）
+//   4. getOptions()           → 改用 label.question__option（真實 class）
+//   5. 題目偵測               → 改用 div.question-wrap（真實 class）
+//   6. waitForInfoPage()      → 同步改用 moocs-question-set 判斷
 (async function () {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
 
     // ══════════════════════════════════════════════
     // API 設定面板（首次執行選擇引擎）
     // ══════════════════════════════════════════════
-    let AI_ENGINE  = localStorage.getItem('moocs_ai_engine') || '';   // 'gemini' | 'claude'
+    let AI_ENGINE  = localStorage.getItem('moocs_ai_engine') || '';
     let GEMINI_KEY = localStorage.getItem('moocs_gemini_key') || '';
     let CLAUDE_KEY = localStorage.getItem('moocs_claude_key') || '';
 
-    // 如果沒有選擇引擎，先顯示設定視窗
     if (!AI_ENGINE || (AI_ENGINE === 'gemini' && !GEMINI_KEY) || (AI_ENGINE === 'claude' && !CLAUDE_KEY)) {
         const result = await showSetupDialog();
         if (!result) return;
@@ -32,9 +38,7 @@
 
             overlay.innerHTML = `
             <div style="background:#13151f;border:1px solid #2a2d3e;border-radius:16px;padding:28px 32px;width:480px;max-width:95vw;color:#e2e8f0;font-family:monospace">
-              <div style="font-size:16px;font-weight:bold;color:#4f8ef7;margin-bottom:18px">🎓 MOOCS v9.0 ─ AI 引擎設定</div>
-
-              <!-- 引擎選擇 -->
+              <div style="font-size:16px;font-weight:bold;color:#4f8ef7;margin-bottom:18px">🎓 MOOCS v9.1 ─ AI 引擎設定</div>
               <div style="margin-bottom:16px">
                 <div style="font-size:11px;color:#64748b;margin-bottom:8px">選擇 AI 引擎</div>
                 <div style="display:flex;gap:10px">
@@ -52,37 +56,22 @@
                   </label>
                 </div>
               </div>
-
-              <!-- Gemini Key 欄位 -->
               <div id="block-gemini" style="margin-bottom:14px;${savedEngine==='claude'?'display:none':''}">
                 <div style="font-size:11px;color:#22c55e;margin-bottom:5px">🌟 Gemini API Key</div>
                 <input id="inp-gemini" type="password" placeholder="AIza..." value="${savedGemini}"
                   style="width:100%;box-sizing:border-box;background:#0a0c14;border:1px solid #2a2d3e;border-radius:7px;padding:9px 12px;color:#e2e8f0;font-size:12px;font-family:monospace">
                 <div style="margin-top:6px;font-size:10px;color:#475569">
-                  💡 免費申請：
-                  <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#22c55e">aistudio.google.com/app/apikey</a>
-                  → 登入 Google → 「Get API key」→ 「Create API key」→ 複製貼上
-                </div>
-                <div style="margin-top:4px;font-size:10px;color:#334155">
-                  ✅ 免費額度：Gemini 2.0 Flash 每分鐘 15 次・每天 1500 次（足夠日常使用）
+                  💡 免費申請：<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#22c55e">aistudio.google.com/app/apikey</a>
                 </div>
               </div>
-
-              <!-- Claude Key 欄位 -->
               <div id="block-claude" style="margin-bottom:14px;${savedEngine==='gemini'?'display:none':''}">
                 <div style="font-size:11px;color:#a78bfa;margin-bottom:5px">🤖 Claude API Key</div>
                 <input id="inp-claude" type="password" placeholder="sk-ant-..." value="${savedClaude}"
                   style="width:100%;box-sizing:border-box;background:#0a0c14;border:1px solid #2a2d3e;border-radius:7px;padding:9px 12px;color:#e2e8f0;font-size:12px;font-family:monospace">
                 <div style="margin-top:6px;font-size:10px;color:#475569">
                   💡 申請：<a href="https://console.anthropic.com" target="_blank" style="color:#a78bfa">console.anthropic.com</a>
-                  → 登入 → API Keys → Create Key
-                </div>
-                <div style="margin-top:4px;font-size:10px;color:#334155">
-                  ⚠️ Claude 為付費 API，需先加值才能使用
                 </div>
               </div>
-
-              <!-- 按鈕 -->
               <div style="display:flex;gap:8px;margin-top:18px">
                 <button id="btn-save" style="flex:1;padding:11px;background:#1a3a1a;color:#22c55e;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:bold">✅ 儲存並開始</button>
                 <button id="btn-cancel" style="padding:11px 18px;background:#2a1a1a;color:#ef4444;border:none;border-radius:8px;cursor:pointer;font-size:12px">✕ 取消</button>
@@ -91,7 +80,6 @@
 
             document.body.appendChild(overlay);
 
-            // 引擎切換動態效果
             const radios = overlay.querySelectorAll('input[name="engine"]');
             const lblGemini = overlay.querySelector('#lbl-gemini');
             const lblClaude = overlay.querySelector('#lbl-claude');
@@ -109,10 +97,8 @@
             }
 
             radios.forEach(r => r.addEventListener('change', updateEngineUI));
-            // 點 label 也觸發
             [lblGemini, lblClaude].forEach(lbl => lbl.addEventListener('click', () => {
-                const r = lbl.querySelector('input');
-                r.checked = true;
+                lbl.querySelector('input').checked = true;
                 updateEngineUI();
             }));
             updateEngineUI();
@@ -155,7 +141,7 @@
 
     panel.innerHTML = `
         <div id="mv90-hdr" style="background:linear-gradient(135deg,#1e2130,#252840);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:move;border-bottom:1px solid #2a2d3e">
-            <span style="font-weight:bold;color:#4f8ef7">🎓 MOOCS v9.0 ${engineLabel}</span>
+            <span style="font-weight:bold;color:#4f8ef7">🎓 MOOCS v9.1 ${engineLabel}</span>
             <div style="display:flex;gap:8px;align-items:center">
                 <span id="mv90-cfg" style="cursor:pointer;font-size:10px;color:#64748b;border:1px solid #2a2d3e;padding:2px 6px;border-radius:4px">⚙️ 切換引擎</span>
                 <span id="mv90-close" style="cursor:pointer;opacity:.5">✕</span>
@@ -177,7 +163,6 @@
     document.getElementById('mv90-auto').onclick  = () => { stopped = false; runAll(); };
     document.getElementById('mv90-now').onclick   = () => { stopped = false; doQuizFromInfoPage('手動'); };
     document.getElementById('mv90-cfg').onclick   = async () => {
-        // 重新設定引擎
         localStorage.removeItem('moocs_ai_engine');
         const result = await showSetupDialog();
         if (result) {
@@ -187,9 +172,8 @@
             localStorage.setItem('moocs_ai_engine',  AI_ENGINE);
             localStorage.setItem('moocs_gemini_key', GEMINI_KEY);
             localStorage.setItem('moocs_claude_key', CLAUDE_KEY);
-            // 更新標籤
             panel.querySelector('#mv90-hdr span').innerHTML =
-                '🎓 MOOCS v9.0 ' + (AI_ENGINE==='gemini'
+                '🎓 MOOCS v9.1 ' + (AI_ENGINE==='gemini'
                     ? '<span style="color:#22c55e">🌟 Gemini</span>'
                     : '<span style="color:#a78bfa">🤖 Claude</span>');
             log(`✅ 已切換至 ${AI_ENGINE}`, '#4f8ef7');
@@ -217,17 +201,18 @@
     }
 
     // ══════════════════════════════════════════════
-    // 偵測說明頁
+    // ✅ 修正1：偵測說明頁
+    // 說明頁特徵：moocs-question-set 存在，且頁面有「總題數」文字
+    // 但題目容器 div.question-wrap 不存在（還未進入作答）
     // ══════════════════════════════════════════════
     function isInfoPageVisible() {
-        const btns = [...document.querySelectorAll('button,a')]
-            .filter(b => {
-                if (b.closest('#moocs-v90')) return false;
-                if (!b.offsetParent) return false;
-                return /^進入測驗$|^開始測驗$/.test(b.textContent?.trim() || '');
-            });
-        if (!btns.length) return false;
-        return /總題數|測驗時間|通過標準|測驗次數/.test(document.body.innerText || '');
+        const qs = document.querySelector('moocs-question-set');
+        if (!qs) return false;
+        const bodyText = qs.innerText || '';
+        const hasInfoText = /總題數|測驗時間|通過標準|測驗次數/.test(bodyText);
+        // 說明頁時沒有題目選項
+        const hasOptions = !!document.querySelector('label.question__option');
+        return hasInfoText && !hasOptions;
     }
 
     async function waitForInfoPage(timeoutMs=15000) {
@@ -249,14 +234,12 @@
             : askClaude(q, opts_text, type, retry);
     }
 
-    // Gemini API
     async function askGemini(q, opts_text, type, retry=0) {
         const isYN = type?.includes('是非');
         const prompt = isYN
             ? `台灣教育訓練是非題，只回答0（正確）或1（錯誤），不要解釋：\n${q}`
             : `台灣教育訓練單選題，選最正確答案，只回答數字（從0開始），不要解釋：\n題目：${q}\n選項：\n${opts_text}`;
         try {
-            // 優先用 gemini-2.0-flash，免費額度充足
             const model = 'gemini-2.0-flash';
             const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
             const res   = await fetch(url, {
@@ -271,7 +254,6 @@
                 return askGemini(q, opts_text, type, retry+1);
             }
             const data = await res.json();
-            // Gemini 回傳結構：candidates[0].content.parts[last].text
             const parts = data?.candidates?.[0]?.content?.parts;
             const text  = parts ? parts[parts.length-1]?.text?.trim() : '';
             return text?.match(/\d/)?.[0] || '0';
@@ -281,7 +263,6 @@
         }
     }
 
-    // Claude API
     async function askClaude(q, opts_text, type, retry=0) {
         const isYN = type?.includes('是非');
         const prompt = isYN
@@ -313,67 +294,48 @@
     }
 
     // ══════════════════════════════════════════════
-    // 找「下一題」按鈕（v9.0 精準版）
+    // ✅ 修正2：找「下一題」翻頁按鈕
+    // 真實 class：button.btn-control.--right
     // ══════════════════════════════════════════════
     function findNextBtn() {
-        // 策略1：文字精確比對
+        // 策略1：直接用確認的 class（最可靠）
+        const byClass = document.querySelector('button.btn-control.--right, button[class*="btn-control"][class*="--right"]');
+        if (byClass && !byClass.disabled && byClass.offsetParent) return byClass;
+
+        // 策略2：備援 — 文字精確比對
         const byText = [...document.querySelectorAll('button')]
             .find(b => /^下一題$|^下一$|^Next$/.test(b.textContent?.trim())
                 && b.offsetParent && !b.closest('#moocs-v90') && !b.disabled);
         if (byText) return byText;
 
-        // 策略2：右側小型圓形箭頭（更嚴格的條件）
-        const halfW = innerWidth / 2;
-        const candidates = [...document.querySelectorAll('button,[role="button"]')]
-            .filter(el => {
-                if (el.closest('#moocs-v90')) return false;
-                if (!el.offsetParent || el.disabled) return false;
-                const r = el.getBoundingClientRect();
-                if (r.width === 0 || r.height === 0) return false;
-                // 在頁面右半部
-                if (r.left < halfW) return false;
-                // 嚴格限制尺寸：圓形箭頭通常 20-60px
-                if (r.width > 80 || r.height > 80) return false;
-                if (r.width < 20 || r.height < 20) return false;
-                // 垂直範圍：頁面中段（排除頁頭頁尾、固定工具列）
-                if (r.top < 120 || r.top > innerHeight - 80) return false;
-                // 必須有明確箭頭特徵
-                const txt = (el.textContent?.trim() || '').toLowerCase();
-                const html = (el.innerHTML || '').toLowerCase();
-                return (
-                    txt === '' ||
-                    txt === '>' || txt === '›' || txt === '→' || txt === '❯' ||
-                    html.includes('chevron') || html.includes('arrow-right') ||
-                    html.includes('next') || html.includes('forward') ||
-                    // MOOCS 常用 SVG path 或 i 標籤箭頭
-                    html.includes('<svg') || html.includes('<i ')
-                );
-            });
-
-        if (!candidates.length) return null;
-
-        // 取最靠右且靠下的按鈕（避開左箭頭）
-        return candidates.sort((a, b) => {
-            const ra = a.getBoundingClientRect();
-            const rb = b.getBoundingClientRect();
-            // 優先選最右邊的
-            return (rb.left + rb.right) - (ra.left + ra.right);
-        })[0];
+        return null;
     }
 
-    // 找「進入測驗」按鈕
+    // ══════════════════════════════════════════════
+    // ✅ 修正3：找「進入測驗」按鈕
+    // 真實 class：.fill-button，且 visible（offsetWidth > 0）
+    // 說明頁才會出現，其他時候 display:none
+    // ══════════════════════════════════════════════
     function findInfoPageEnterBtn() {
-        const all = [...document.querySelectorAll('button,a')]
-            .filter(b => {
-                if (b.closest('#moocs-v90')) return false;
-                if (!b.offsetParent) return false;
-                return /^進入測驗$|^開始測驗$/.test(b.textContent?.trim() || '');
-            });
-        if (!all.length) return null;
-        return all.reduce((a, b) => b.getBoundingClientRect().width > a.getBoundingClientRect().width ? b : a);
+        // 策略1：直接找 .fill-button（說明頁專屬，確認可見）
+        const byFill = [...document.querySelectorAll('.fill-button')]
+            .find(b => b.offsetWidth > 0 && b.offsetHeight > 0
+                && !b.closest('#moocs-v90')
+                && /進入測驗|開始測驗/.test(b.textContent?.trim()));
+        if (byFill) return byFill;
+
+        // 策略2：備援 — moocs-question-set 內的任何含「進入」文字的按鈕
+        const qs = document.querySelector('moocs-question-set');
+        if (qs) {
+            const inQS = [...qs.querySelectorAll('button, a')]
+                .find(b => b.offsetWidth > 0 && /進入測驗|開始測驗/.test(b.textContent?.trim()));
+            if (inQS) return inQS;
+        }
+
+        return null;
     }
 
-    // 找送出按鈕（排除假按鈕）
+    // 找送出按鈕
     function findSubmitBtn() {
         return [...document.querySelectorAll('button')]
             .find(b =>
@@ -382,23 +344,60 @@
             );
     }
 
-    // 取得題目選項（支援 label / radio 兩種結構）
+    // ══════════════════════════════════════════════
+    // ✅ 修正4：取得題目選項
+    // 真實 class：label.question__option
+    // ══════════════════════════════════════════════
     function getOptions() {
-        // 優先找帶文字的 label
-        let opts = [...document.querySelectorAll('moocs-question label, .question-wrap label, fieldset label')]
+        // 策略1：確認有效的 label（有文字、可見）
+        const byLabel = [...document.querySelectorAll('label.question__option')]
             .filter(o => o.offsetParent !== null && o.innerText?.trim());
-        if (opts.length) return opts;
+        if (byLabel.length) return byLabel;
 
-        // 備援：找 radio input 的父 li / div
-        opts = [...document.querySelectorAll('input[type="radio"]')]
+        // 策略2：備援 — li.question__option-wrap 內的 label
+        const byLi = [...document.querySelectorAll('li.question__option-wrap label')]
+            .filter(o => o.offsetParent !== null && o.innerText?.trim());
+        if (byLi.length) return byLi;
+
+        // 策略3：備援 — radio input
+        const byRadio = [...document.querySelectorAll('input[type="radio"]')]
             .filter(r => r.offsetParent !== null)
             .map(r => r.closest('li,div,label') || r.parentElement)
             .filter(Boolean);
-        return opts;
+        return byRadio;
     }
 
     // ══════════════════════════════════════════════
-    // 答題主流程（v9.0 修正版）
+    // ✅ 修正5：題目文字偵測
+    // 真實 class：div.question-wrap（包含 Q1/單選題 + 題目文字 + 選項）
+    // 作答頁才存在，說明頁時不存在
+    // ══════════════════════════════════════════════
+    function getQuestionEl() {
+        // 策略1：直接抓 question-wrap 內的題目文字段落
+        const wrap = document.querySelector('div.question-wrap');
+        if (wrap && wrap.offsetParent) return wrap;
+
+        // 策略2：備援舊 selector
+        return document.querySelector(
+            '.question__title,.question-title,[class*="question__title"],[class*="questionTitle"]'
+        );
+    }
+
+    function getQuestionText(el) {
+        if (!el) return '';
+        // question-wrap 同時包含 Q1/單選/10分 等前綴，過濾掉選項部分
+        // 只取前段題幹文字（選項之前）
+        const optionTexts = [...document.querySelectorAll('label.question__option')]
+            .map(o => o.innerText?.trim()).filter(Boolean);
+        let txt = el.innerText?.trim() || '';
+        // 移除選項文字以及前綴（Q1 / 單選題 10 分）
+        optionTexts.forEach(opt => { txt = txt.replace(opt, ''); });
+        txt = txt.replace(/^Q\d+\s*[\/｜]\s*(單選題|是非題|多選題)\s*\d+\s*分\s*/i, '');
+        return txt.trim();
+    }
+
+    // ══════════════════════════════════════════════
+    // 答題主流程（v9.1 修正版）
     // ══════════════════════════════════════════════
     async function doQuizFromInfoPage(name, attempt=1) {
         if (stopped) return 'stopped';
@@ -407,7 +406,7 @@
         log(`\n📝「${name}」第${attempt}次`, '#a78bfa');
         setStatus(`測驗：${name}（${attempt}次）`, '#a78bfa');
 
-        // 等進入測驗按鈕
+        // ✅ 等進入測驗按鈕（用修正後的 findInfoPageEnterBtn）
         let enterBtn = null;
         const tid0 = startCountdown('等說明頁', 15);
         for (let t=0; t<50; t++) {
@@ -417,21 +416,27 @@
         }
         clearInterval(tid0);
 
-        if (!enterBtn) { log('  ❌ 找不到進入測驗按鈕', '#ef4444'); return 'no_enter'; }
+        if (!enterBtn) {
+            log('  ❌ 找不到進入測驗按鈕', '#ef4444');
+            // 診斷輸出：列出目前所有可見 .fill-button
+            const fills = [...document.querySelectorAll('.fill-button')];
+            log(`  診斷：.fill-button 共 ${fills.length} 個`, '#475569');
+            fills.forEach(b => log(`    → "${b.textContent?.trim()}" visible:${b.offsetWidth>0}`, '#334155'));
+            return 'no_enter';
+        }
 
         const r = enterBtn.getBoundingClientRect();
-        log(`  ✅ 點進入測驗（x:${Math.round(r.left)} w:${Math.round(r.width)}）`, '#22c55e');
+        log(`  ✅ 找到進入測驗按鈕（x:${Math.round(r.left)} w:${Math.round(r.width)}）`, '#22c55e');
         enterBtn.click();
         await sleep(3000);
 
-        // 等第一題出現（多個選擇器）
-        const Q_SELECTORS = '.question__title,.question-title,[class*="question__title"],[class*="questionTitle"]';
+        // ✅ 等第一題出現（用修正後的 getQuestionEl）
         let hasQ = false;
         for (let t=0; t<20; t++) {
-            if (document.querySelector(Q_SELECTORS)?.offsetParent) { hasQ=true; break; }
+            if (getQuestionEl()?.offsetParent) { hasQ=true; break; }
             await sleep(500);
         }
-        if (!hasQ) { log('  ⚠️ 題目未出現，可能為單頁多題模式', '#f59e0b'); }
+        if (!hasQ) { log('  ⚠️ 題目未出現，繼續嘗試', '#f59e0b'); }
 
         // 答題迴圈
         let answered=0, noQCount=0, prevQ='', sameQRepeat=0;
@@ -439,9 +444,8 @@
         for (let i=0; i<80; i++) {
             if (stopped) return 'stopped';
 
-            const qEl = document.querySelector(Q_SELECTORS);
+            const qEl = getQuestionEl();
 
-            // 沒有題目
             if (!qEl || !qEl.offsetParent) {
                 noQCount++;
                 if (answered > 0 && noQCount >= 5) { log(`  ✅ 答完（${answered}題）`, '#22c55e'); break; }
@@ -451,13 +455,12 @@
             }
             noQCount = 0;
 
-            const q = qEl.innerText.trim();
+            const q = getQuestionText(qEl);
 
             // 題目重複偵測
             if (q === prevQ) {
                 sameQRepeat++;
                 if (sameQRepeat >= 3) {
-                    // 3次相同，強制嘗試翻頁或送出
                     log('  ⚠️ 題目卡住，強制處理', '#f59e0b');
                     const sub = findSubmitBtn();
                     if (sub) { sub.click(); log('  📤 強制送出', '#22c55e'); await sleep(4000); break; }
@@ -473,10 +476,12 @@
             prevQ = q;
             sameQRepeat = 0;
 
-            const typeEl = document.querySelector('.quesiton__type-and-index,.question__type-and-index,[class*="type-and-index"]');
-            const type   = typeEl?.innerText || '';
-            const opts   = getOptions();
+            // 題型偵測（從 question-wrap 內的 Q1/單選題 前綴判斷）
+            const qWrapText = qEl.innerText || '';
+            const typeMatch = qWrapText.match(/(單選題|是非題|多選題)/);
+            const type = typeMatch ? typeMatch[1] : '';
 
+            const opts = getOptions();
             if (!opts.length) { await sleep(800); continue; }
 
             const opts_text = opts.map((o, idx) => `${idx}: ${o.innerText?.trim() || o.value || ''}`).join('\n');
@@ -486,7 +491,7 @@
             const ans = await askAI(q, opts_text, type);
             const idx = Math.min(parseInt(ans) || 0, opts.length-1);
 
-            // 點選答案（優先 click label，備援 click radio）
+            // 點選答案
             const target = opts[idx];
             const radio  = target?.querySelector?.('input[type="radio"]') || (target?.tagName==='INPUT' ? target : null);
             if (radio) radio.click();
@@ -496,11 +501,10 @@
             answered++;
             await sleep(600);
 
-            // ⭐ 核心修正：先找下一題，送出是最後才考慮
-            // 單題模式：每題後有「下一題」按鈕
+            // ✅ 修正後的翻頁邏輯：先找 .btn-control.--right
             const nxt = findNextBtn();
             if (nxt) {
-                log(`  → 下一題：「${nxt.textContent?.trim()||'(箭頭)'}」`, '#60a5fa');
+                log(`  → 下一題 ▶`, '#60a5fa');
                 nxt.click();
                 await sleep(1800);
                 continue;
@@ -516,14 +520,14 @@
                 break;
             }
 
-            // 都找不到，印診斷資訊繼續等
+            // 診斷：列出所有可見按鈕
             log('  ⚠️ 找不到下一題/送出，診斷中...', '#f59e0b');
-            [...document.querySelectorAll('button,[role="button"]')]
+            [...document.querySelectorAll('button')]
                 .filter(b => b.offsetParent && !b.closest('#moocs-v90'))
                 .forEach(b => {
                     const rb = b.getBoundingClientRect();
-                    if (rb.width > 0 && rb.height > 0)
-                        log(`  btn:"${b.textContent?.trim()?.substring(0,15)}" x:${Math.round(rb.left)} y:${Math.round(rb.top)} ${Math.round(rb.width)}×${Math.round(rb.height)}`, '#334155');
+                    if (rb.width > 0)
+                        log(`  btn:"${b.textContent?.trim()?.substring(0,15)}" cls:"${b.className?.substring(0,30)}"`, '#334155');
                 });
             await sleep(1500);
         }
@@ -561,6 +565,7 @@
             const tab = [...document.querySelectorAll('[role="tab"],.mat-tab-label')]
                 .find(el => /課程簡介/.test(el.textContent));
             if (tab) { tab.click(); await sleep(1500); }
+            // 展開所有 expansion panel（確保「未測驗」按鈕可見）
             for (const h of document.querySelectorAll('mat-expansion-panel-header')) {
                 const p = h.closest('mat-expansion-panel');
                 if (!p?.classList.contains('mat-expanded')) { h.click(); await sleep(400); }
@@ -576,15 +581,20 @@
             round++;
             if (!location.href.includes('/learning/')) { log('⚠️ 頁面跑掉', '#ef4444'); break; }
 
+            // ✅ 找「未測驗」按鈕（class: "button ng-star-inserted"，disabled=true，文字=未測驗）
             const quizBtns = [...document.querySelectorAll('button')]
                 .filter(b => b.textContent?.trim()==='未測驗' && b.offsetParent && !b.dataset.skip);
 
             if (!quizBtns.length) { log('\n✅ 全部完成！', '#22c55e'); setStatus('🎉 完成', '#22c55e'); break; }
 
             const btn   = quizBtns[0];
-            const p2    = btn.closest('mat-expansion-panel');
-            const gName = p2?.querySelector('mat-expansion-panel-header')?.innerText?.trim()?.substring(0,25) || `測驗${round}`;
-            const cnt   = attempts.get(gName) || 0;
+            // 找父層 syllabus__list-item 的名稱，或 expansion panel 標題
+            const listItem = btn.closest('.syllabus__list-item, li');
+            const panel2   = btn.closest('mat-expansion-panel');
+            const gName = listItem?.querySelector('.course-node__title, p')?.innerText?.trim()?.substring(0,25)
+                       || panel2?.querySelector('mat-expansion-panel-header')?.innerText?.trim()?.substring(0,25)
+                       || `測驗${round}`;
+            const cnt = attempts.get(gName) || 0;
 
             if (cnt >= 3) { log(`⏭ 跳過「${gName}」`, '#f59e0b'); btn.dataset.skip='1'; continue; }
             attempts.set(gName, cnt+1);
@@ -592,9 +602,11 @@
             log(`\n🎯 [${round}]「${gName}」(第${cnt+1}次)`, '#60a5fa');
             setStatus(`點擊：${gName}`, '#a78bfa');
 
-            btn.scrollIntoView({ behavior:'smooth', block:'center' });
+            // ✅ 透過父元素的 <a> 連結進入，而非直接點 disabled 的「未測驗」按鈕
+            const link = btn.closest('a.syllabus__item-content, a.course-node, a') || btn;
+            link.scrollIntoView({ behavior:'smooth', block:'center' });
             await sleep(500);
-            btn.click();
+            link.click();
 
             const tid2  = startCountdown('等說明頁', 15);
             const info  = await waitForInfoPage(15000);
@@ -615,7 +627,7 @@
     }
 
     const engineStr = AI_ENGINE === 'gemini' ? '🌟 Gemini 2.0 Flash' : '🤖 Claude Haiku';
-    log(`✅ v9.0 就緒｜引擎：${engineStr}`, '#4f8ef7');
+    log(`✅ v9.1 就緒｜引擎：${engineStr}`, '#4f8ef7');
     log('【🚀 全自動測驗】掃描所有未測驗', '#60a5fa');
     log('【📝 現在答題】在說明頁時直接答題', '#60a5fa');
     log('【⚙️ 切換引擎】隨時更換 AI 引擎', '#60a5fa');
