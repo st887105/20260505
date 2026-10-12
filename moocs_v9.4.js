@@ -1,22 +1,24 @@
-// MOOCS v9.8 — 自動辨識章節；客觀題 AI 判斷；主觀問卷依使用者指定選第一項。
-// 在已登入的 MOOCS 課程頁執行。登入後的 DOM 尚未實測，請先核對掃描清單。
+// MOOCS v9.9 — 自動辨識章節；客觀題 AI 判斷；主觀問卷依使用者指定選第一項。
+// 由使用者提供的 v9.8 原始檔修改；登入後的實際課程尚未實測。
+// 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
 (() => {
   'use strict';
   if (location.origin !== 'https://moocs.moe.edu.tw' || !location.hash.includes('/learning/')) {
     alert('請先登入並開啟 MOOCS 課程學習頁，再執行此程式。');
     return;
   }
-  const prior = window.__moocs98?.root || window.__moocs97?.root || window.__moocs96?.root;
+  const prior = window.__moocs99?.root || window.__moocs98?.root || window.__moocs97?.root || window.__moocs96?.root;
   const previousSettings = Object.fromEntries(['engine', 'model', 'key'].map(name => [name, prior?.querySelector(`[data-role="${name}"]`)?.value || '']));
+  window.__moocs99?.close();
   window.__moocs96?.close();
   window.__moocs97?.close();
   window.__moocs98?.close();
   const root = document.createElement('section');
-  root.id = 'moocs-v98';
+  root.id = 'moocs-v99';
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.8 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.9 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -24,6 +26,10 @@
     <button data-action="stop">停止</button></div>
     <p data-role="status" aria-live="polite">等待掃描</p>
     <div data-role="queue"></div>
+    <details open><summary>播放設定</summary>
+      <label><input data-role="background" type="checkbox">允許分頁在背景時繼續等待播放</label>
+      <p style="color:#fde68a">背景運作未必獲平台認列。此選項不會偽裝分頁可見、不會自動恢復平台暫停、不會模擬操作或繞過學習紀錄與閒置檢查。瀏覽器也可能限制背景播放，請自行留意平台提示。</p>
+    </details>
     <details><summary>作答設定</summary>
       <p><label><input data-role="ai" type="checkbox" checked>客觀題由 AI 選答案</label><br>
       <label><input data-role="submit" type="checkbox" checked>自動繳交測驗／問卷</label></p>
@@ -39,6 +45,8 @@
   const $ = name => root.querySelector(`[data-role="${name}"]`);
   for (const name of ['engine', 'model', 'key']) if (previousSettings[name]) $(name).value = previousSettings[name];
   const playbackDone = new Set(), completedItems = new Set();
+  let verifiedItem = null, activeItemKey = null;
+  const recordedVideos = new Set();
   let queue = [], running = false, scanning = false, controller = null, generation = 0;
   function place(left, top) {
     root.style.left = `${Math.max(8, Math.min(left, Math.max(8, innerWidth - root.offsetWidth - 8)))}px`;
@@ -77,7 +85,12 @@
     button.setAttribute('aria-expanded', String(!$('body').hidden));
     reposition();
   }
-  const visible = el => !!el?.isConnected && !root.contains(el) && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  const visible = el => {
+    if (!el?.isConnected || root.contains(el) || !el.getClientRects().length || el.ownerDocument.defaultView.getComputedStyle(el).visibility === 'hidden') return false;
+    // 同來源 iframe 的影片，也必須確認外層 iframe 可見。
+    try { const frame = el.ownerDocument.defaultView.frameElement; return !frame || visible(frame); }
+    catch { return false; }
+  };
   const note = text => {
     $('status').textContent = text;
     const line = document.createElement('div');
@@ -108,7 +121,7 @@
   const courseURL = location.href;
   const COURSE_HASH = location.hash.match(/^#\/learning\/[^/?]+/)?.[0];
   function ensureCourse() {
-    if (!location.hash.startsWith(COURSE_HASH)) throw new Error('已離開原課程，停止。');
+    if (location.hash.match(/^#\/learning\/[^/?]+/)?.[0] !== COURSE_HASH) throw new Error('已離開原課程，停止。');
   }
   async function expand() {
     for (const header of document.querySelectorAll('mat-expansion-panel-header')) {
@@ -155,6 +168,8 @@
   const itemMatches = (entry, item) => entry.key === item.key;
   function rowSelected(row) {
     for (let el = row, depth = 0; el && depth < 3; el = el.parentElement, depth++) {
+      // 共用容器的 active 不能代表每個子章節都被選取。
+      if (depth > 0 && [...el.querySelectorAll(explicitRowSelector)].some(other => other !== row && !row.contains(other) && !other.contains(row))) break;
       if (el.matches('[aria-selected="true"], [aria-current="true"], [aria-current="page"], .active, .selected, .is-active, .mat-selected')) return true;
       if (/(?:^|\s)\S*--(?:active|selected|current)(?:\s|$)/.test(String(el.className))) return true;
     }
@@ -170,7 +185,7 @@
       if (url && (url.origin !== location.origin || !url.hash.startsWith(COURSE_HASH))) return [];
       const text = cleanText(row.textContent);
       let title = cleanText(row.querySelector('.course-node__title, [class*="title"]')?.textContent || text);
-      title = title.replace(/\s*(?:未測驗|已通過|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%)\s*$/g, '').trim();
+      title = title.replace(/\s*(?:未測驗|已填寫|已提交|測驗合格|已通過|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%)\s*$/g, '').trim();
       if (!title) return [];
       const key = url && url.href !== courseURL ? `url:${url.href}` : `title:${title}`;
       if (seen.has(key)) return [];
@@ -190,7 +205,7 @@
       const badge = document.createElement('small');
       badge.style.cssText = 'color:#a5b4fc;white-space:nowrap';
       const labels = { auto: '自動辨識', video: '影片', quiz: '測驗', survey: '問卷' };
-      badge.textContent = completedItems.has(item.key) ? '已處理' : playbackDone.has(item.key) ? '已播放完' : labels[item.type];
+      badge.textContent = completedItems.has(item.key) ? '平台已完成' : recordedVideos.has(item.key) ? '平台顯示觀看完成' : playbackDone.has(item.key) ? '已播完／認列待確認' : labels[item.type];
       line.append(text, badge); $('queue').append(line);
     });
   }
@@ -217,29 +232,61 @@
   function videoElement() {
     return documents().flatMap(doc => [...doc.querySelectorAll('video')]).find(visible);
   }
+  function videoSource(video) {
+    return video ? (video.currentSrc || video.src || video.querySelector('source[src]')?.src || '') : '';
+  }
+  function playable(video) {
+    return !!video && !!videoSource(video) && video.readyState >= 2 && !video.error && !video.ended;
+  }
   async function openItem(item) {
-    ensureCourse();
+    ensureCourse(); stopped();
+    verifiedItem = null;
     const match = roster().find(entry => itemMatches(entry, item));
     if (!match) throw new Error(`找不到章節「${item.title}」，請回課綱重新掃描。`);
-    stopped();
     match.link.scrollIntoView({ block: 'center' });
-    const oldVideo = videoElement();
-    const oldSource = oldVideo?.currentSrc || oldVideo?.src;
-    const oldQuestion = question()?.signature;
-    const oldTask = taskSnapshot();
-    const alreadySelected = rowSelected(match.row);
-    match.link.click();
-    await sleep(700);
-    await waitFor(() => {
-      const current = roster().find(entry => itemMatches(entry, item));
-      const video = videoElement();
-      const changed = alreadySelected || (current && rowSelected(current.row)) || video !== oldVideo ||
-        (video && (video.currentSrc || video.src) !== oldSource) || question()?.signature !== oldQuestion || taskSnapshot() !== oldTask;
-      return changed && contentKind(item);
-    }, 25000, '點擊後無法確認章節切換或內容類型。請下載診斷；不沿用前一章內容。');
-    item.type = contentKind(item);
-    renderQueue();
-    note(`已辨識「${item.title}」：${{ video: '影片', quiz: '測驗', survey: '問卷' }[item.type]}`);
+    const oldVideo = videoElement(), oldSource = videoSource(oldVideo);
+    const oldQuestion = question()?.signature, oldTask = taskSnapshot();
+    const initialSelected = rowSelected(match.row);
+    const sameItem = activeItemKey === item.key || (activeItemKey === null && initialSelected);
+    let loaded = false, emptySeen = false, stableSince = 0, candidate = null;
+    const onEmpty = () => { emptySeen = true; };
+    const onLoaded = () => { loaded = true; };
+    oldVideo?.addEventListener('emptied', onEmpty);
+    oldVideo?.addEventListener('loadedmetadata', onLoaded);
+    try {
+      match.link.click();
+      const result = await waitFor(() => {
+        ensureCourse();
+        const current = roster().find(entry => itemMatches(entry, item));
+        if (!current) return false;
+        const selected = rowSelected(current.row);
+        // 若清單明确選取別章，不接受任何播放器／題目變化。
+        const otherSelected = roster().some(entry => entry.key !== item.key && rowSelected(entry.row));
+        if (otherSelected && !selected) return false;
+        const video = videoElement(), kind = contentKind(item);
+        if (!kind) return false;
+        const q = question()?.signature, task = taskSnapshot();
+        const newTask = !!(q && q !== oldQuestion) || !!(task && task !== oldTask);
+        const newMedia = !!video && (video !== oldVideo || videoSource(video) !== oldSource || (emptySeen && loaded));
+        // 選取樣式單獨不足以證明播放器切換。相同 URL 重載須有載入事件。
+        const verified = kind === 'video'
+          ? (playable(video) || (sameItem && video?.ended && video.readyState >= 2 && videoSource(video) && !video.error)) && (sameItem || newMedia)
+          : (sameItem || newTask);
+        if (!verified) { stableSince = 0; candidate = null; return false; }
+        const identity = kind === 'video' ? video : (q || task);
+        if (identity !== candidate) { candidate = identity; stableSince = Date.now(); return false; }
+        if (Date.now() - stableSince < 600) return false;
+        return { key: item.key, kind, video: kind === 'video' ? video : null, source: videoSource(video) };
+      }, 30000, `無法確認「${item.title}」內容切換成功；已停止，不沿用前一章內容。請下載診斷。`);
+      verifiedItem = result;
+      activeItemKey = item.key;
+      item.type = result.kind;
+      renderQueue();
+      note(`已核對切換「${item.title}」：${{ video: '影片', quiz: '測驗', survey: '問卷' }[item.type]}`);
+    } finally {
+      oldVideo?.removeEventListener('emptied', onEmpty);
+      oldVideo?.removeEventListener('loadedmetadata', onLoaded);
+    }
   }
   function taskSnapshot() {
     const q = question();
@@ -267,36 +314,61 @@
     await expand();
     await waitFor(() => roster().length, 15000, '課綱尚未載入或章節 selector 不適用。');
   }
-  const videoRecorded = text => /已完成觀看|觀看完成|已觀看|已完成|(?:^|\s)100\s*%/.test(text);
+  const videoRecorded = text => !/未完成|尚未完成|未觀看|尚未觀看/.test(text) && /已完成觀看|觀看完成|已觀看|已完成|(?:^|\s)100\s*%/.test(text);
   async function watch(item) {
     note(`觀看：${item.title}`);
-    if (choose('div.question-wrap', /./)) throw new Error('此項被設為影片，但頁面顯示測驗。請修正清單類型。');
-    const video = await waitFor(videoElement, 20000, '找不到可讀取的影片播放器。若為跨來源 iframe，請手動觀看；此版本無法確認其播放結束。');
+    if (choose('div.question-wrap', /./)) throw new Error('此項被設為影片，但頁面顯示測驗。請下載診斷。');
+    const video = verifiedItem?.key === item.key && verifiedItem.kind === 'video' ? verifiedItem.video : null;
+    if (!video || video !== videoElement()) throw new Error('播放器尚未核對，停止。');
+    const source = verifiedItem.source;
     if (video.playbackRate !== 1) video.playbackRate = 1;
-    try { await video.play(); } catch { note('瀏覽器未允許自動播放，請在播放器按播放；程式會等待。'); }
-    let lastTime = video.currentTime, lastAdvance = Date.now(), lastNote = 0;
-    while (!video.ended) {
-      stopped(); ensureCourse();
-      if (document.hidden) throw new Error('頁面已切到背景。請回到課程頁播放，避免平台不記錄觀看。');
-      if (!video.isConnected || videoElement() !== video) throw new Error('播放器已更換，停止以免錯認影片。');
-      if (video.error) throw new Error(`播放器錯誤：${video.error.code}`);
-      if (video.playbackRate !== 1 || video.seeking) throw new Error('偵測到變速或跳轉；請以正常速度完整觀看後重新開始。');
-      if (video.currentTime > lastTime + 0.05) { lastAdvance = Date.now(); lastTime = video.currentTime; }
-      if (Date.now() - lastAdvance > 120000) throw new Error('影片超過兩分鐘沒有前進，請檢查暫停、緩衝或平台提示。');
-      if (Date.now() - lastNote > 10000) {
-        const duration = Number.isFinite(video.duration) ? Math.round(video.duration) : '?';
-        note(`觀看 ${item.title}：${Math.round(video.currentTime)} / ${duration} 秒${video.paused ? '（暫停中）' : ''}`);
-        lastNote = Date.now();
+    let naturallyEnded = video.ended, backgroundNoted = false;
+    const onEnded = () => { naturallyEnded = true; };
+    video.addEventListener('ended', onEnded);
+    try {
+      if (document.hidden && !$('background').checked) throw new Error('頁面已切到背景。請回到課程頁，或自行啟用背景等待選項後重新開始。');
+      // 背景時不呼叫 play()，避免恢復平台刻意暫停的播放器。
+      if (!document.hidden && !naturallyEnded) {
+        try { await video.play(); } catch { note('瀏覽器未允許自動播放，請在播放器按播放；程式會等待。'); }
       }
-      await sleep(500);
-    }
-    note('影片已結束；等待平台儲存並回課綱核對。');
+      let lastTime = video.currentTime, lastAdvance = Date.now(), lastNote = 0;
+      while (true) {
+        stopped(); ensureCourse();
+        if (document.hidden && !$('background').checked) throw new Error('頁面已切到背景。請回到課程頁播放，或自行啟用背景等待選項後重新開始。');
+        if (document.hidden && !backgroundNoted) {
+          note('分頁在背景；僅等待原播放器，背景運作未必獲平台認列。請自行留意閒置與學習紀錄提示。');
+          backgroundNoted = true;
+        }
+        if (!document.hidden) backgroundNoted = false;
+        if (!video.isConnected || videoElement() !== video || videoSource(video) !== source) throw new Error('播放器或影片來源已更換，停止以免錯認影片。');
+        if (video.error) throw new Error(`播放器錯誤：${video.error.code}`);
+        if (video.playbackRate !== 1 || video.seeking) throw new Error('偵測到變速或跳轉；請以正常速度完整觀看後重新開始。');
+        if (naturallyEnded || video.ended) break;
+        if (video.currentTime > lastTime + 0.05) { lastAdvance = Date.now(); lastTime = video.currentTime; }
+        if (Date.now() - lastAdvance > 120000) throw new Error('影片超過兩分鐘沒有前進，請回分頁檢查暫停、緩衝或平台提示；不自動恢復平台暫停。');
+        if (Date.now() - lastNote > 10000) {
+          const duration = Number.isFinite(video.duration) ? Math.round(video.duration) : '?';
+          note(`觀看 ${item.title}：${Math.round(video.currentTime)} / ${duration} 秒${video.paused ? '（暫停中）' : ''}`);
+          lastNote = Date.now();
+        }
+        await sleep(500);
+      }
+    } finally { video.removeEventListener('ended', onEnded); }
+    playbackDone.add(item.key);
+    note('影片已自然結束；等待平台儲存並核對課綱。');
     await sleep(4000);
     await returnToRoster();
-    const row = roster().find(entry => itemMatches(entry, item));
-    playbackDone.add(item.key);
-    if (row && videoRecorded(row.text)) note(`平台已顯示影片完成：${item.title}`);
-    else note(`已實際播放完：${item.title}；課綱未提供可讀取的完成狀態，平台紀錄尚未確認。`);
+    // 只讀取平台顯示，不提交或偽造觀看紀錄。未確認仍可切下一章，
+    // 但下次開始不以本機「播放完」紀錄略過此章。
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      stopped(); ensureCourse();
+      const row = roster().find(entry => itemMatches(entry, item));
+      if (row && videoRecorded(row.text)) { recordedVideos.add(item.key); break; }
+      await sleep(500);
+    }
+    if (recordedVideos.has(item.key)) note(`平台已顯示影片完成：${item.title}`);
+    else note(`影片已播完：${item.title}；平台認列尚未確認。接續下一章，請自行核對學習紀錄；重新開始時仍會檢查此章。`);
     renderQueue();
   }
   function questions() {
@@ -392,7 +464,7 @@
       note(`測驗 ${item.title}：第 ${index + 1} 題`);
       const useFirst = subjective(q);
       if (!useFirst && (!settings.ai || !settings.key || !settings.model)) {
-        root.querySelector('details').open = true;
+        $('ai').closest('details').open = true;
         throw new Error('這是客觀題，需要在「作答設定」輸入 API Key，再按自動開始。主觀問卷可不使用 AI。');
       }
       const answers = useFirst ? [0] : await ask(q, settings);
@@ -457,8 +529,9 @@
         stopped();
         const current = roster().find(entry => itemMatches(entry, item));
         if (!current) throw new Error(`章節「${item.title}」不在目前課綱；請回課綱重新掃描。`);
-        const complete = playbackDone.has(item.key) || completedItems.has(item.key) ||
-          (item.type === 'video' ? videoRecorded(current.text) : /已通過|測驗合格|已填寫/.test(current.text));
+        const complete = item.type === 'video' ? videoRecorded(current.text) :
+          item.type === 'auto' ? videoRecorded(current.text) || /已通過|測驗合格|已填寫/.test(current.text) :
+          /已通過|測驗合格|已填寫/.test(current.text);
         if (complete) { note(`平台已完成，略過：${item.title}`); continue; }
         await openItem(item);
         if (item.type === 'video') await watch(item);
@@ -471,7 +544,10 @@
   }
   function diagnosticData() {
     return {
-      version: '9.8',
+      version: '9.9', backgroundAllowed: $('background').checked, pageHidden: document.hidden,
+      activeItemKey, verifiedSource: verifiedItem?.source || '',
+      playbackEnded: [...playbackDone], platformRecorded: [...recordedVideos],
+      media: documents().flatMap(doc => [...doc.querySelectorAll('video')]).map(video => ({ source: videoSource(video), readyState: video.readyState, ended: video.ended, paused: video.paused, currentTime: video.currentTime, duration: Number.isFinite(video.duration) ? video.duration : null })),
       chapterRows: rows().length, scanEntries: roster().map(({ title, type }) => ({ title, type })),
       chapterElements: rows().map(row => ({ title: cleanText(row.textContent), tag: row.tagName, class: String(row.className),
         ancestors: [row.parentElement, row.parentElement?.parentElement].filter(Boolean).map(el => ({ tag: el.tagName, class: String(el.className) })) })),
@@ -483,18 +559,18 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.8-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.9-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
   function stop() { controller?.abort(); note('已要求停止。'); }
-  function close() { controller?.abort(); window.removeEventListener('resize', reposition); root.remove(); if (window.__moocs98?.root === root) delete window.__moocs98; }
+  function close() { controller?.abort(); window.removeEventListener('resize', reposition); root.remove(); if (window.__moocs99?.root === root) delete window.__moocs99; }
   $('engine').onchange = () => { $('model').value = $('engine').value === 'gemini' ? 'gemini-2.5-flash-lite' : 'claude-haiku-4-5-20251001'; };
   root.addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const actions = { scan, run, stop, close, diagnose, download, collapse };
     if (actions[action]) Promise.resolve(actions[action]()).catch(error => note(`停止：${error.message}`));
   });
-  window.__moocs98 = { root, close };
+  window.__moocs99 = { root, close };
   scan().catch(error => note(`停止：${error.message}`));
 })();
