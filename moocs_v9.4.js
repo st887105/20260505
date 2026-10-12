@@ -1,4 +1,4 @@
-// MOOCS v9.7 — 支援無 href 的右側 EP 課綱；可拖曳、縮合視窗。
+// MOOCS v9.8 — 自動辨識章節；客觀題 AI 判斷；主觀問卷依使用者指定選第一項。
 // 在已登入的 MOOCS 課程頁執行。登入後的 DOM 尚未實測，請先核對掃描清單。
 (() => {
   'use strict';
@@ -6,34 +6,39 @@
     alert('請先登入並開啟 MOOCS 課程學習頁，再執行此程式。');
     return;
   }
+  const prior = window.__moocs98?.root || window.__moocs97?.root || window.__moocs96?.root;
+  const previousSettings = Object.fromEntries(['engine', 'model', 'key'].map(name => [name, prior?.querySelector(`[data-role="${name}"]`)?.value || '']));
   window.__moocs96?.close();
   window.__moocs97?.close();
+  window.__moocs98?.close();
   const root = document.createElement('section');
-  root.id = 'moocs-v97';
+  root.id = 'moocs-v98';
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.7 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.8 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
-    <p>先掃描並核對每項類型，再開始。未知項目會停止流程。</p>
-    <div><button data-action="scan">掃描章節</button> <button data-action="run">依序開始</button>
+    <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
+    <div><button data-action="scan">重新掃描</button> <button data-action="run">自動開始</button>
     <button data-action="stop">停止</button></div>
     <p data-role="status" aria-live="polite">等待掃描</p>
     <div data-role="queue"></div>
-    <details><summary>測驗設定（預設手動）</summary>
-      <p><label><input data-role="ai" type="checkbox">使用 AI 選答案</label><br>
-      <label><input data-role="submit" type="checkbox">允許自動繳交測驗</label></p>
+    <details><summary>作答設定</summary>
+      <p><label><input data-role="ai" type="checkbox" checked>客觀題由 AI 選答案</label><br>
+      <label><input data-role="submit" type="checkbox" checked>自動繳交測驗／問卷</label></p>
       <label>引擎 <select data-role="engine"><option value="gemini">Gemini</option><option value="claude">Claude</option></select></label>
       <p><label>模型 <input data-role="model" value="gemini-2.5-flash-lite"></label></p>
       <p><label>API Key <input data-role="key" type="password" autocomplete="off"></label></p>
-      <small>Key 只保留在本面板記憶體。啟用 AI 會把題目與選項傳給所選服務，可能產生費用。答案需自行核對。</small>
+      <small>主觀問卷固定選第一項。客觀題需 API Key；Key 只留在本面板記憶體。AI 會把題目與選項傳給所選服務，可能產生費用，答案不保證正確。</small>
     </details>
     <details><summary>診斷與記錄</summary><button data-action="diagnose">顯示診斷</button>
       <button data-action="download">下載診斷</button>
       <pre data-role="log" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre></details></div>`;
   document.body.append(root);
   const $ = name => root.querySelector(`[data-role="${name}"]`);
+  for (const name of ['engine', 'model', 'key']) if (previousSettings[name]) $(name).value = previousSettings[name];
+  const playbackDone = new Set(), completedItems = new Set();
   let queue = [], running = false, scanning = false, controller = null, generation = 0;
   function place(left, top) {
     root.style.left = `${Math.max(8, Math.min(left, Math.max(8, innerWidth - root.offsetWidth - 8)))}px`;
@@ -171,7 +176,7 @@
       if (seen.has(key)) return [];
       seen.add(key);
       const hints = `${text} ${[...row.querySelectorAll('[title],[aria-label]')].map(el => `${el.title || ''} ${el.getAttribute('aria-label') || ''}`).join(' ')}`;
-      const type = /問卷|調查/.test(hints) ? 'survey' : /測驗|單選題|是非題|多選題/.test(hints) ? 'quiz' : /影片|影音|video|播放/i.test(hints) ? 'video' : 'unknown';
+      const type = /問卷|調查/.test(hints) ? 'survey' : /測驗|單選題|是非題|多選題/.test(hints) ? 'quiz' : /影片|影音|video|播放/i.test(hints) ? 'video' : 'auto';
       return [{ key, url: url?.href || null, title, type, text, row, link }];
     });
   }
@@ -182,15 +187,11 @@
       line.style.margin = '6px 0';
       const text = document.createElement('span');
       text.textContent = `${index + 1}. ${item.title} `;
-      const select = document.createElement('select');
-      for (const [value, title] of [['unknown', '待確認'], ['video', '影片'], ['quiz', '測驗'], ['survey', '問卷（手動）']]) {
-        const option = document.createElement('option');
-        option.value = value; option.textContent = title; select.append(option);
-      }
-      select.value = item.type;
-      select.disabled = running;
-      select.onchange = () => { item.type = select.value; };
-      line.append(text, select); $('queue').append(line);
+      const badge = document.createElement('small');
+      badge.style.cssText = 'color:#a5b4fc;white-space:nowrap';
+      const labels = { auto: '自動辨識', video: '影片', quiz: '測驗', survey: '問卷' };
+      badge.textContent = completedItems.has(item.key) ? '已處理' : playbackDone.has(item.key) ? '已播放完' : labels[item.type];
+      line.append(text, badge); $('queue').append(line);
     });
   }
   async function scan() {
@@ -202,7 +203,7 @@
       await expand();
       queue = roster();
       renderQueue();
-      note(queue.length ? `找到 ${queue.length} 項；請將 EP 章節核對為影片或測驗。課後問卷另列手動，不會自動填寫。` : '未找到章節。請展開右側「課程章節」，再掃描；仍失敗時按「下載診斷」。');
+      note(queue.length ? `找到 ${queue.length} 項；按「自動開始」，程式會點開並判斷內容，不需手選類型。` : '未找到章節。請展開右側「課程章節」，再掃描；仍失敗時按「下載診斷」。');
       reposition();
     } finally { scanning = false; }
   }
@@ -214,7 +215,7 @@
     return docs;
   }
   function videoElement() {
-    return documents().flatMap(doc => [...doc.querySelectorAll('video')]).find(video => video.getClientRects().length && !root.contains(video));
+    return documents().flatMap(doc => [...doc.querySelectorAll('video')]).find(visible);
   }
   async function openItem(item) {
     ensureCourse();
@@ -225,19 +226,35 @@
     const oldVideo = videoElement();
     const oldSource = oldVideo?.currentSrc || oldVideo?.src;
     const oldQuestion = question()?.signature;
+    const oldTask = taskSnapshot();
     const alreadySelected = rowSelected(match.row);
     match.link.click();
     await sleep(700);
-    if (item.type === 'video' && !alreadySelected) {
-      await waitFor(() => {
-        const video = videoElement();
-        if (!video) return false;
-        const current = roster().find(entry => itemMatches(entry, item));
-        return video !== oldVideo || (video.currentSrc || video.src) !== oldSource || (current && rowSelected(current.row));
-      }, 20000, '章節點擊後沒有確認播放器切換。請手動點此影片，再重新掃描；不沿用上一部影片。');
-    } else if (item.type === 'quiz' && oldQuestion && !alreadySelected) {
-      await waitFor(() => question()?.signature !== oldQuestion, 15000, '測驗章節沒有切換。');
-    }
+    await waitFor(() => {
+      const current = roster().find(entry => itemMatches(entry, item));
+      const video = videoElement();
+      const changed = alreadySelected || (current && rowSelected(current.row)) || video !== oldVideo ||
+        (video && (video.currentSrc || video.src) !== oldSource) || question()?.signature !== oldQuestion || taskSnapshot() !== oldTask;
+      return changed && contentKind(item);
+    }, 25000, '點擊後無法確認章節切換或內容類型。請下載診斷；不沿用前一章內容。');
+    item.type = contentKind(item);
+    renderQueue();
+    note(`已辨識「${item.title}」：${{ video: '影片', quiz: '測驗', survey: '問卷' }[item.type]}`);
+  }
+  function taskSnapshot() {
+    const q = question();
+    if (q) return q.signature;
+    const start = choose('button,a,[role="button"]', /^(開始填寫|填寫問卷|開始問卷|進入測驗|開始測驗)$/);
+    if (!start) return '';
+    return cleanText(start.closest('[class*="quiz"], [class*="survey"], [class*="question"], [class*="assessment"]')?.textContent || start.parentElement?.textContent).slice(0, 500);
+  }
+  function contentKind(item) {
+    const q = question();
+    if (q?.options.length) return item.type === 'survey' ? 'survey' : 'quiz';
+    if (choose('button,a,[role="button"]', /^(開始填寫|填寫問卷|開始問卷)$/)) return 'survey';
+    if (choose('button,a,[role="button"]', /^(進入測驗|開始測驗)$/)) return 'quiz';
+    if (videoElement()) return 'video';
+    return null;
   }
   async function returnToRoster() {
     stopped();
@@ -276,22 +293,27 @@
     note('影片已結束；等待平台儲存並回課綱核對。');
     await sleep(4000);
     await returnToRoster();
-    await waitFor(() => {
-      const row = roster().find(entry => itemMatches(entry, item));
-      return row && videoRecorded(row.text);
-    }, 15000, '影片結束，但課綱未顯示已完成／100%。請手動確認學習進度；不繼續測驗。');
-    note(`平台已顯示影片完成：${item.title}`);
+    const row = roster().find(entry => itemMatches(entry, item));
+    playbackDone.add(item.key);
+    if (row && videoRecorded(row.text)) note(`平台已顯示影片完成：${item.title}`);
+    else note(`已實際播放完：${item.title}；課綱未提供可讀取的完成狀態，平台紀錄尚未確認。`);
+    renderQueue();
   }
-  function question() {
-    const wrap = [...document.querySelectorAll('div.question-wrap')].find(visible);
-    if (!wrap) return null;
-    const options = [...wrap.querySelectorAll('label.question__option, li.question__option-wrap label')]
-      .filter(el => visible(el) && el.innerText.trim());
-    const text = wrap.innerText.trim();
-    const index = options.length ? text.indexOf(options[0].innerText.trim()) : -1;
-    const prompt = index > 0 ? text.slice(0, index).trim() : text;
-    return { wrap, options, text: prompt, signature: `${prompt}\n${options.map(el => el.innerText.trim()).join('\n')}` };
+  function questions() {
+    const wraps = [...document.querySelectorAll('div.question-wrap, [class*="survey-question"], [class*="question-item"], fieldset')]
+      .filter(el => visible(el) && el.querySelector('input[type="radio"], input[type="checkbox"]'));
+    return wraps.filter(el => !wraps.some(other => other !== el && el.contains(other))).map(wrap => {
+      const options = [...wrap.querySelectorAll('label')].filter(el => visible(el) && el.innerText.trim() &&
+        (el.querySelector('input[type="radio"], input[type="checkbox"]') || (el.htmlFor && wrap.ownerDocument.getElementById(el.htmlFor)?.matches('input[type="radio"], input[type="checkbox"]'))));
+      const text = wrap.innerText.trim();
+      const stem = wrap.cloneNode(true);
+      stem.querySelectorAll('label,input,button,select,textarea').forEach(el => el.remove());
+      const prompt = cleanText(stem.textContent) || text;
+      const names = [...wrap.querySelectorAll('input')].map(input => input.name).join('|');
+      return { wrap, options, text: prompt, signature: `${names}\n${prompt}\n${options.map(el => el.innerText.trim()).join('\n')}` };
+    });
   }
+  function question() { return questions()[0] || null; }
   function parseAnswers(raw, count, multiple) {
     let data;
     try { data = JSON.parse(raw.trim()); } catch { throw new Error(`AI 回覆不是答案陣列：${raw.slice(0, 80)}`); }
@@ -300,9 +322,14 @@
     }
     return data;
   }
+  function subjective(q) {
+    const rating = q.options.some(el => /非常滿意|很滿意|不滿意|非常同意|非常不同意/.test(el.innerText));
+    const personal = /滿意|滿不滿意|滿意度|同意程度|推薦|學習經驗|參與經驗|是否曾|是否有過|你的經驗|您的經驗|你認為|您認為|你覺得|您覺得|你感覺|您感覺|對您.{0,12}幫助|對你.{0,12}幫助|課程.{0,12}(?:幫助|收穫|評價)|自我評估|授課.{0,12}評價|觀看.{0,12}體驗/.test(q.text);
+    return rating || (personal && !/下列|何者|哪一|哪個|正確|錯誤|法規|依規定/.test(q.text));
+  }
   async function ask(questionData, settings) {
     const multiple = /多選題/.test(questionData.text);
-    const prompt = `請依題目與選項內容判斷答案。僅回覆 JSON 整數陣列，索引從 0 起。${multiple ? '多選，可選多項。' : '單選或是非，只選一項。是非也必須依實際選項順序判斷。'}不能判斷時回覆 []。\n題目：${questionData.text}\n${questionData.options.map((el, index) => `${index}: ${el.innerText.trim()}`).join('\n')}`;
+    const prompt = `請依題目與選項內容判斷答案。若詢問使用者滿意度、個人感受、實際經驗或自我評估，遵循使用者已指定的填答偏好，一律回覆 [0]。客觀知識題則判斷正確答案。僅回覆 JSON 整數陣列，索引從 0 起。${multiple ? '多選，可選多項。' : '單選或是非，只選一項。是非也必須依實際選項順序判斷。'}不能判斷客觀答案時回覆 []。\n題目：${questionData.text}\n${questionData.options.map((el, index) => `${index}: ${el.innerText.trim()}`).join('\n')}`;
     const isGemini = settings.engine === 'gemini';
     const url = isGemini ? `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent` : 'https://api.anthropic.com/v1/messages';
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -341,25 +368,39 @@
     const result = [...document.querySelectorAll('[class*="result"], [role="dialog"], [class*="score"]')].filter(visible);
     return result.find(el => /(?:測驗通過|已通過|恭喜.{0,12}通過|測驗合格)/.test(el.innerText) && !/未通過|不合格/.test(el.innerText));
   }
+  const inputFor = option => option.querySelector('input[type="radio"], input[type="checkbox"]') || (option.htmlFor ? option.ownerDocument.getElementById(option.htmlFor) : null);
+  function taskComplete(item) {
+    const row = roster().find(entry => itemMatches(entry, item));
+    if (row && /已通過|已完成|已填寫|已提交/.test(row.text)) return true;
+    if (item.type === 'quiz') return !!confirmedResult();
+    return [...document.querySelectorAll('[role="dialog"], [class*="result"], [class*="success"], [class*="survey"], [class*="questionnaire"]')]
+      .filter(visible).some(el => /感謝.{0,12}填寫|填寫完成|問卷已送出|提交成功|送出成功|已完成問卷/.test(el.innerText));
+  }
   async function quiz(item, settings) {
-    if (!settings.ai) throw new Error(`已依順序到達測驗「${item.title}」。請手動作答；完成後回課綱重新掃描。`);
+    const answeredQuestions = new Set();
     let entered = false;
     await waitFor(() => {
       if (question()?.options.length) return true;
-      const enter = choose('button', /^(進入測驗|開始測驗)$/);
+      const enter = choose('button,a,[role="button"]', /^(進入測驗|開始測驗|開始填寫|填寫問卷|開始問卷)$/);
       if (enter && !entered) { stopped(); enter.click(); entered = true; }
       return false;
     }, 20000, '測驗頁未出現。');
     for (let index = 0; index < 100; index++) {
       stopped(); ensureCourse();
-      const q = question();
+      const q = questions().find(entry => !answeredQuestions.has(entry.signature));
       if (!q?.options.length) throw new Error('題目或選項無法辨識。');
       note(`測驗 ${item.title}：第 ${index + 1} 題`);
-      const answers = await ask(q, settings);
+      const useFirst = subjective(q);
+      if (!useFirst && (!settings.ai || !settings.key || !settings.model)) {
+        root.querySelector('details').open = true;
+        throw new Error('這是客觀題，需要在「作答設定」輸入 API Key，再按自動開始。主觀問卷可不使用 AI。');
+      }
+      const answers = useFirst ? [0] : await ask(q, settings);
+      if (useFirst) note('依你的主觀問卷偏好，選第一個選項。');
       stopped();
-      if (question()?.signature !== q.signature) throw new Error('等待 AI 期間題目已改變，停止以免選錯題。');
+      if (!questions().some(entry => entry.wrap === q.wrap && entry.signature === q.signature)) throw new Error('等待 AI 期間題目已改變，停止以免選錯題。');
       for (const [optionIndex, option] of q.options.entries()) {
-        const input = option.querySelector('input[type="radio"], input[type="checkbox"]') || (option.htmlFor ? document.getElementById(option.htmlFor) : null);
+        const input = inputFor(option);
         if (!input || input.disabled) throw new Error('無法找到可操作的答案輸入欄。');
         const desired = answers.includes(optionIndex);
         if (input.type === 'checkbox' && input.checked !== desired) input.click();
@@ -368,34 +409,45 @@
       await sleep(300);
       if (answers.some(i => {
         const option = q.options[i];
-        const input = option.querySelector('input') || document.getElementById(option.htmlFor);
+        const input = inputFor(option);
         return !input?.checked;
       })) throw new Error('選項沒有成功勾選，停止。');
-      const next = [...document.querySelectorAll('button.btn-control.--right')].find(el => visible(el) && !el.disabled) || choose('button', /^(下一題|下一|Next)$/);
+      answeredQuestions.add(q.signature);
+      if (questions().some(entry => !answeredQuestions.has(entry.signature))) continue;
+      const next = [...document.querySelectorAll('button.btn-control.--right')].find(el => visible(el) && !el.disabled) || choose('button', /^(下一題|下一頁|下一|Next)$/);
       if (next) {
+        const pageSignature = questions().map(entry => entry.signature).join('\n');
         stopped(); next.click();
-        await waitFor(() => question()?.signature !== q.signature, 15000, '下一題沒有載入；不強制繳交。');
+        await waitFor(() => questions().map(entry => entry.signature).join('\n') !== pageSignature, 15000, '下一題沒有載入；不強制繳交。');
         await waitFor(() => question()?.options.length, 15000, '下一題選項尚未載入。');
+        answeredQuestions.clear();
         continue;
       }
-      const submit = choose('button', /^(送出|提交|繳交|繳交作答|Submit)$/);
+      const submit = choose('button', /^(送出|提交|繳交|繳交作答|送出問卷|提交問卷|完成填寫|Submit)$/);
       if (!submit) throw new Error('找不到下一題或繳交按鈕。');
       if (!settings.submit) throw new Error('答案已勾選，請核對後手動繳交。');
       stopped(); submit.click();
-      await waitFor(confirmedResult, 20000, '未看到明確通過結果。若出現確認視窗，請自行核對並處理；不自動重測。');
-      note(`測驗頁明確顯示通過：${item.title}`);
+      let confirmed = false;
+      await waitFor(() => {
+        if (taskComplete(item)) return true;
+        const dialogs = [...document.querySelectorAll('[role="dialog"], mat-dialog-container')].filter(visible);
+        const dialog = dialogs.find(el => /(?:確定|確認|是否).{0,20}(?:送出|繳交|提交)|(?:送出|繳交|提交).{0,20}(?:確定|確認|是否)/.test(el.innerText));
+        const button = dialog && [...dialog.querySelectorAll('button')].find(el => visible(el) && !el.disabled && /^(確定|確認|送出|繳交|提交)$/.test(el.innerText.trim()));
+        if (button && !confirmed) { stopped(); button.click(); confirmed = true; }
+        return false;
+      }, 25000, '已送出，但未看到明確通過／問卷完成結果。請查看平台提示；不自動重測。');
+      note(`平台顯示${item.type === 'survey' ? '問卷完成' : '測驗通過'}：${item.title}`);
+      completedItems.add(item.key);
       await returnToRoster();
-      await waitFor(() => /已通過|已完成|測驗合格/.test(roster().find(entry => itemMatches(entry, item))?.text || ''), 15000, '結果頁通過，但課綱尚未確認測驗完成，停止。');
       return;
     }
     throw new Error('已到測驗題數上限。');
   }
   async function run() {
     if (running || scanning) return;
-    if (!queue.length) { note('請先掃描章節。'); return; }
-    if (queue.some(item => item.type === 'unknown')) { note('請先確認清單中所有「待確認」項目的類型。'); return; }
+    if (!queue.length) await scan();
+    if (!queue.length) return;
     const settings = { ai: $('ai').checked, submit: $('submit').checked, engine: $('engine').value, model: $('model').value.trim(), key: $('key').value.trim() };
-    if (settings.ai && (!settings.model || !settings.key)) { note('啟用 AI 時需要模型名稱與 API Key。'); return; }
     running = true; controller = new AbortController();
     const thisGeneration = ++generation;
     renderQueue();
@@ -405,12 +457,13 @@
         stopped();
         const current = roster().find(entry => itemMatches(entry, item));
         if (!current) throw new Error(`章節「${item.title}」不在目前課綱；請回課綱重新掃描。`);
-        const complete = item.type === 'video' ? videoRecorded(current.text) : /已通過|測驗合格/.test(current.text);
+        const complete = playbackDone.has(item.key) || completedItems.has(item.key) ||
+          (item.type === 'video' ? videoRecorded(current.text) : /已通過|測驗合格|已填寫/.test(current.text));
         if (complete) { note(`平台已完成，略過：${item.title}`); continue; }
         await openItem(item);
         if (item.type === 'video') await watch(item);
-        else if (item.type === 'survey') throw new Error(`已到達課後問卷「${item.title}」。請依實際學習經驗手動填寫。`);
-        else await quiz(item, settings);
+        else if (item.type === 'survey' || item.type === 'quiz') await quiz(item, settings);
+        else throw new Error('無法辨識此章節的內容；請下載診斷。');
       }
       note('清單處理完畢。請到平台檢查認證條件；這不代表已取得證書。');
     } catch (error) { note(error.name === 'AbortError' ? '已停止；不會繼續點擊或作答。' : `停止：${error.message}`); }
@@ -418,7 +471,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.7',
+      version: '9.8',
       chapterRows: rows().length, scanEntries: roster().map(({ title, type }) => ({ title, type })),
       chapterElements: rows().map(row => ({ title: cleanText(row.textContent), tag: row.tagName, class: String(row.className),
         ancestors: [row.parentElement, row.parentElement?.parentElement].filter(Boolean).map(el => ({ tag: el.tagName, class: String(el.className) })) })),
@@ -430,17 +483,18 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.7-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.8-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
   function stop() { controller?.abort(); note('已要求停止。'); }
-  function close() { controller?.abort(); window.removeEventListener('resize', reposition); root.remove(); if (window.__moocs97?.root === root) delete window.__moocs97; }
+  function close() { controller?.abort(); window.removeEventListener('resize', reposition); root.remove(); if (window.__moocs98?.root === root) delete window.__moocs98; }
   $('engine').onchange = () => { $('model').value = $('engine').value === 'gemini' ? 'gemini-2.5-flash-lite' : 'claude-haiku-4-5-20251001'; };
   root.addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const actions = { scan, run, stop, close, diagnose, download, collapse };
     if (actions[action]) Promise.resolve(actions[action]()).catch(error => note(`停止：${error.message}`));
   });
-  window.__moocs97 = { root, close };
+  window.__moocs98 = { root, close };
+  scan().catch(error => note(`停止：${error.message}`));
 })();
