@@ -1,4 +1,4 @@
-// MOOCS v9.6 — 依序觀看、核對平台進度，再處理測驗。
+// MOOCS v9.7 — 支援無 href 的右側 EP 課綱；可拖曳、縮合視窗。
 // 在已登入的 MOOCS 課程頁執行。登入後的 DOM 尚未實測，請先核對掃描清單。
 (() => {
   'use strict';
@@ -7,14 +7,18 @@
     return;
   }
   window.__moocs96?.close();
+  window.__moocs97?.close();
   const root = document.createElement('section');
-  root.id = 'moocs-v96';
-  root.style.cssText = 'position:fixed;right:16px;top:60px;width:400px;max-width:95vw;max-height:85vh;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;padding:16px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
+  root.id = 'moocs-v97';
+  root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
-    <strong>MOOCS v9.6｜影片 → 進度 → 測驗</strong>
+    <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
+      <strong>MOOCS v9.7 <small>拖曳此處移動</small></strong>
+      <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
+    </div><div data-role="body" style="padding:12px">
     <p>先掃描並核對每項類型，再開始。未知項目會停止流程。</p>
     <div><button data-action="scan">掃描章節</button> <button data-action="run">依序開始</button>
-    <button data-action="stop">停止</button> <button data-action="close">關閉</button></div>
+    <button data-action="stop">停止</button></div>
     <p data-role="status" aria-live="polite">等待掃描</p>
     <div data-role="queue"></div>
     <details><summary>測驗設定（預設手動）</summary>
@@ -25,11 +29,49 @@
       <p><label>API Key <input data-role="key" type="password" autocomplete="off"></label></p>
       <small>Key 只保留在本面板記憶體。啟用 AI 會把題目與選項傳給所選服務，可能產生費用。答案需自行核對。</small>
     </details>
-    <details><summary>診斷與記錄</summary><button data-action="diagnose">顯示播放器診斷</button>
-      <pre data-role="log" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre></details>`;
+    <details><summary>診斷與記錄</summary><button data-action="diagnose">顯示診斷</button>
+      <button data-action="download">下載診斷</button>
+      <pre data-role="log" style="white-space:pre-wrap;max-height:220px;overflow:auto"></pre></details></div>`;
   document.body.append(root);
   const $ = name => root.querySelector(`[data-role="${name}"]`);
-  let queue = [], running = false, controller = null, generation = 0;
+  let queue = [], running = false, scanning = false, controller = null, generation = 0;
+  function place(left, top) {
+    root.style.left = `${Math.max(8, Math.min(left, Math.max(8, innerWidth - root.offsetWidth - 8)))}px`;
+    root.style.top = `${Math.max(8, Math.min(top, Math.max(8, innerHeight - root.offsetHeight - 8)))}px`;
+  }
+  const handle = $('handle');
+  let drag = null;
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.target.closest('button')) return;
+    const rect = root.getBoundingClientRect();
+    drag = { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener('pointermove', event => {
+    if (drag?.id === event.pointerId) place(event.clientX - drag.x, event.clientY - drag.y);
+  });
+  const endDrag = () => { drag = null; };
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(event, endDrag);
+  handle.addEventListener('keydown', event => {
+    if (event.target !== handle) return;
+    const step = event.shiftKey ? 50 : 10;
+    const deltas = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    if (!deltas[event.key]) return;
+    event.preventDefault();
+    const rect = root.getBoundingClientRect();
+    place(rect.left + deltas[event.key][0], rect.top + deltas[event.key][1]);
+  });
+  const reposition = () => { const rect = root.getBoundingClientRect(); place(rect.left, rect.top); };
+  window.addEventListener('resize', reposition);
+  place(16, 100);
+  function collapse() {
+    $('body').hidden = !$('body').hidden;
+    const button = root.querySelector('[data-action="collapse"]');
+    button.textContent = $('body').hidden ? '展開' : '縮合';
+    button.setAttribute('aria-expanded', String(!$('body').hidden));
+    reposition();
+  }
   const visible = el => !!el?.isConnected && !root.contains(el) && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   const note = text => {
     $('status').textContent = text;
@@ -59,7 +101,7 @@
   }
   const choose = (selector, regex) => [...document.querySelectorAll(selector)].find(el => visible(el) && !el.disabled && regex.test(el.textContent.trim()));
   const courseURL = location.href;
-  const COURSE_HASH = location.hash.split('?')[0];
+  const COURSE_HASH = location.hash.match(/^#\/learning\/[^/?]+/)?.[0];
   function ensureCourse() {
     if (!location.hash.startsWith(COURSE_HASH)) throw new Error('已離開原課程，停止。');
   }
@@ -72,23 +114,65 @@
       }
     }
   }
-  // 保留原稿的章節 selector；登入後需用掃描清單核對，不能假定所有節點都是影片。
-  const rows = () => [...document.querySelectorAll('.syllabus__list-item, .course-node, mat-expansion-panel li')]
-    .filter(row => visible(row) && ![...row.children].some(child => child.matches('.syllabus__list-item, .course-node')));
-  const rowLink = row => row.matches('a[href]') ? row : row.querySelector('a.syllabus__item-content[href], a.course-node[href], a[href]');
+  const cleanText = text => (text || '').trim().replace(/\s+/g, ' ');
+  const chapterLabel = text => /^(?:EP\s*\d+(?:[-.．]\d+)*[.．、:\s]?|第\s*[\d一二三四五六七八九十]+\s*[章節])|(?:課後問卷|課後測驗|章節測驗|總測驗)/i.test(text);
+  const explicitRowSelector = '.syllabus__list-item, .course-node, mat-expansion-panel li, mat-list-item, [role="listitem"]';
+  function rows() {
+    const explicit = [...document.querySelectorAll(explicitRowSelector)].filter(visible);
+    // 畫面上的 EP1 / EP2-1 / 課後問卷可能是 Angular click 節點，沒有 href。
+    const candidates = [...document.querySelectorAll('a, button, li, div, p, span, h3, h4, mat-list-item')].filter(el => {
+      if (!visible(el)) return false;
+      const text = cleanText(el.textContent);
+      const rect = el.getBoundingClientRect();
+      return text.length <= 240 && chapterLabel(text) && rect.left >= innerWidth * 0.55;
+    });
+    const labels = candidates.filter(el => !candidates.some(other => other !== el && el.contains(other)));
+    const result = labels.map(label => {
+      const ancestor = label.closest(explicitRowSelector);
+      if (ancestor && cleanText(ancestor.textContent).length <= 400) return ancestor;
+      const clickable = label.closest('a,button,[role="button"]');
+      if (clickable && cleanText(clickable.textContent).length <= 400) return clickable;
+      let row = label;
+      for (let parent = label.parentElement, depth = 0; parent && depth < 4; parent = parent.parentElement, depth++) {
+        if (parent.getBoundingClientRect().left < innerWidth * 0.55 || cleanText(parent.textContent).length > 400 ||
+          labels.filter(other => parent.contains(other)).length !== 1) break;
+        row = parent; // 保留同一列的完成文字及 Angular click 父層。
+      }
+      return row;
+    });
+    for (const el of explicit) {
+      if (!result.some(other => el.contains(other) || other.contains(el)) &&
+        !explicit.some(other => other !== el && el.contains(other)) && cleanText(el.textContent).length <= 400) result.push(el);
+    }
+    return [...new Set(result)].sort((a, b) => a.compareDocumentPosition(b) & 4 ? -1 : 1);
+  }
+  const rowLink = row => row.matches('a,button,[role="button"]') ? row : row.querySelector('a,button,[role="button"]') || row;
+  const itemMatches = (entry, item) => entry.key === item.key;
+  function rowSelected(row) {
+    for (let el = row, depth = 0; el && depth < 3; el = el.parentElement, depth++) {
+      if (el.matches('[aria-selected="true"], [aria-current="true"], [aria-current="page"], .active, .selected, .is-active, .mat-selected')) return true;
+      if (/(?:^|\s)\S*--(?:active|selected|current)(?:\s|$)/.test(String(el.className))) return true;
+    }
+    return false;
+  }
   function roster() {
     const seen = new Set();
     return rows().flatMap(row => {
       const link = rowLink(row);
-      if (!link || !visible(link)) return [];
-      const url = new URL(link.getAttribute('href'), location.href);
-      if (url.origin !== location.origin || !url.hash.startsWith(COURSE_HASH) || url.href === courseURL || seen.has(url.href)) return [];
-      seen.add(url.href);
-      const title = (row.querySelector('.course-node__title, [class*="title"]')?.textContent || link.textContent || '').trim().replace(/\s+/g, ' ');
-      const text = row.textContent.trim().replace(/\s+/g, ' ');
+      if (!visible(link)) return [];
+      const rawURL = link.getAttribute('href');
+      const url = rawURL && rawURL !== '#' && !rawURL.startsWith('javascript:') ? new URL(rawURL, location.href) : null;
+      if (url && (url.origin !== location.origin || !url.hash.startsWith(COURSE_HASH))) return [];
+      const text = cleanText(row.textContent);
+      let title = cleanText(row.querySelector('.course-node__title, [class*="title"]')?.textContent || text);
+      title = title.replace(/\s*(?:未測驗|已通過|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%)\s*$/g, '').trim();
+      if (!title) return [];
+      const key = url && url.href !== courseURL ? `url:${url.href}` : `title:${title}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
       const hints = `${text} ${[...row.querySelectorAll('[title],[aria-label]')].map(el => `${el.title || ''} ${el.getAttribute('aria-label') || ''}`).join(' ')}`;
-      const type = /測驗|單選題|是非題|多選題/.test(hints) ? 'quiz' : /影片|影音|video|播放/i.test(hints) ? 'video' : 'unknown';
-      return [{ url: url.href, title: title || '(無標題)', type, text, row, link }];
+      const type = /問卷|調查/.test(hints) ? 'survey' : /測驗|單選題|是非題|多選題/.test(hints) ? 'quiz' : /影片|影音|video|播放/i.test(hints) ? 'video' : 'unknown';
+      return [{ key, url: url?.href || null, title, type, text, row, link }];
     });
   }
   function renderQueue() {
@@ -99,7 +183,7 @@
       const text = document.createElement('span');
       text.textContent = `${index + 1}. ${item.title} `;
       const select = document.createElement('select');
-      for (const [value, title] of [['unknown', '待確認'], ['video', '影片'], ['quiz', '測驗']]) {
+      for (const [value, title] of [['unknown', '待確認'], ['video', '影片'], ['quiz', '測驗'], ['survey', '問卷（手動）']]) {
         const option = document.createElement('option');
         option.value = value; option.textContent = title; select.append(option);
       }
@@ -110,13 +194,17 @@
     });
   }
   async function scan() {
-    if (running) return;
+    if (running || scanning) return;
+    scanning = true;
     controller = new AbortController();
-    ensureCourse();
-    await expand();
-    queue = roster();
-    renderQueue();
-    note(queue.length ? `找到 ${queue.length} 項；請核對順序、類型及是否涵蓋全部章節。` : '找不到章節連結。請先回課綱，再使用診斷；此版本的 selector 可能不適用。');
+    try {
+      ensureCourse();
+      await expand();
+      queue = roster();
+      renderQueue();
+      note(queue.length ? `找到 ${queue.length} 項；請將 EP 章節核對為影片或測驗。課後問卷另列手動，不會自動填寫。` : '未找到章節。請展開右側「課程章節」，再掃描；仍失敗時按「下載診斷」。');
+      reposition();
+    } finally { scanning = false; }
   }
   function documents() {
     const docs = [document];
@@ -130,16 +218,32 @@
   }
   async function openItem(item) {
     ensureCourse();
-    const match = roster().find(entry => entry.url === item.url);
+    const match = roster().find(entry => itemMatches(entry, item));
     if (!match) throw new Error(`找不到章節「${item.title}」，請回課綱重新掃描。`);
     stopped();
     match.link.scrollIntoView({ block: 'center' });
+    const oldVideo = videoElement();
+    const oldSource = oldVideo?.currentSrc || oldVideo?.src;
+    const oldQuestion = question()?.signature;
+    const alreadySelected = rowSelected(match.row);
     match.link.click();
     await sleep(700);
+    if (item.type === 'video' && !alreadySelected) {
+      await waitFor(() => {
+        const video = videoElement();
+        if (!video) return false;
+        const current = roster().find(entry => itemMatches(entry, item));
+        return video !== oldVideo || (video.currentSrc || video.src) !== oldSource || (current && rowSelected(current.row));
+      }, 20000, '章節點擊後沒有確認播放器切換。請手動點此影片，再重新掃描；不沿用上一部影片。');
+    } else if (item.type === 'quiz' && oldQuestion && !alreadySelected) {
+      await waitFor(() => question()?.signature !== oldQuestion, 15000, '測驗章節沒有切換。');
+    }
   }
   async function returnToRoster() {
     stopped();
     ensureCourse();
+    // 學習頁右側清單持續存在時，不需返回或重載課程。
+    if (roster().length) { await expand(); return; }
     if (location.href !== courseURL) location.href = courseURL;
     await waitFor(() => location.href === courseURL, 15000, '無法回到原課綱。');
     await sleep(800);
@@ -173,7 +277,7 @@
     await sleep(4000);
     await returnToRoster();
     await waitFor(() => {
-      const row = roster().find(entry => entry.url === item.url);
+      const row = roster().find(entry => itemMatches(entry, item));
       return row && videoRecorded(row.text);
     }, 15000, '影片結束，但課綱未顯示已完成／100%。請手動確認學習進度；不繼續測驗。');
     note(`平台已顯示影片完成：${item.title}`);
@@ -281,13 +385,13 @@
       await waitFor(confirmedResult, 20000, '未看到明確通過結果。若出現確認視窗，請自行核對並處理；不自動重測。');
       note(`測驗頁明確顯示通過：${item.title}`);
       await returnToRoster();
-      await waitFor(() => /已通過|已完成|測驗合格/.test(roster().find(entry => entry.url === item.url)?.text || ''), 15000, '結果頁通過，但課綱尚未確認測驗完成，停止。');
+      await waitFor(() => /已通過|已完成|測驗合格/.test(roster().find(entry => itemMatches(entry, item))?.text || ''), 15000, '結果頁通過，但課綱尚未確認測驗完成，停止。');
       return;
     }
     throw new Error('已到測驗題數上限。');
   }
   async function run() {
-    if (running) return;
+    if (running || scanning) return;
     if (!queue.length) { note('請先掃描章節。'); return; }
     if (queue.some(item => item.type === 'unknown')) { note('請先確認清單中所有「待確認」項目的類型。'); return; }
     const settings = { ai: $('ai').checked, submit: $('submit').checked, engine: $('engine').value, model: $('model').value.trim(), key: $('key').value.trim() };
@@ -299,32 +403,44 @@
       ensureCourse();
       for (const item of queue) {
         stopped();
-        const current = roster().find(entry => entry.url === item.url);
+        const current = roster().find(entry => itemMatches(entry, item));
         if (!current) throw new Error(`章節「${item.title}」不在目前課綱；請回課綱重新掃描。`);
         const complete = item.type === 'video' ? videoRecorded(current.text) : /已通過|測驗合格/.test(current.text);
         if (complete) { note(`平台已完成，略過：${item.title}`); continue; }
         await openItem(item);
-        if (item.type === 'video') await watch(item); else await quiz(item, settings);
+        if (item.type === 'video') await watch(item);
+        else if (item.type === 'survey') throw new Error(`已到達課後問卷「${item.title}」。請依實際學習經驗手動填寫。`);
+        else await quiz(item, settings);
       }
       note('清單處理完畢。請到平台檢查認證條件；這不代表已取得證書。');
     } catch (error) { note(error.name === 'AbortError' ? '已停止；不會繼續點擊或作答。' : `停止：${error.message}`); }
     finally { if (generation === thisGeneration) { running = false; renderQueue(); } }
   }
-  function diagnose() {
-    note(JSON.stringify({
+  function diagnosticData() {
+    return {
+      version: '9.7',
       chapterRows: rows().length, scanEntries: roster().map(({ title, type }) => ({ title, type })),
+      chapterElements: rows().map(row => ({ title: cleanText(row.textContent), tag: row.tagName, class: String(row.className),
+        ancestors: [row.parentElement, row.parentElement?.parentElement].filter(Boolean).map(el => ({ tag: el.tagName, class: String(el.className) })) })),
       videoCount: documents().reduce((n, doc) => n + doc.querySelectorAll('video').length, 0),
       iframeOrigins: [...document.querySelectorAll('iframe[src]')].map(el => { try { return new URL(el.src).origin; } catch { return '(未知)'; } }),
       questionVisible: !!question(), buttons: [...document.querySelectorAll('button')].filter(visible).map(el => el.textContent.trim()).filter(Boolean)
-    }, null, 2));
+    };
+  }
+  function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
+  function download() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.7-diagnostic.json';
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
   function stop() { controller?.abort(); note('已要求停止。'); }
-  function close() { controller?.abort(); root.remove(); if (window.__moocs96?.root === root) delete window.__moocs96; }
+  function close() { controller?.abort(); window.removeEventListener('resize', reposition); root.remove(); if (window.__moocs97?.root === root) delete window.__moocs97; }
   $('engine').onchange = () => { $('model').value = $('engine').value === 'gemini' ? 'gemini-2.5-flash-lite' : 'claude-haiku-4-5-20251001'; };
   root.addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
-    const actions = { scan, run, stop, close, diagnose };
+    const actions = { scan, run, stop, close, diagnose, download, collapse };
     if (actions[action]) Promise.resolve(actions[action]()).catch(error => note(`停止：${error.message}`));
   });
-  window.__moocs96 = { root, close };
+  window.__moocs97 = { root, close };
 })();
