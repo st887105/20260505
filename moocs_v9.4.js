@@ -2,7 +2,7 @@
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
-// v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
+// v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
 (() => {
   'use strict';
   if (location.origin !== 'https://moocs.moe.edu.tw' || !location.hash.includes('/learning/')) {
@@ -22,12 +22,14 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.12.1 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.14 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
     <div><button data-action="scan">重新掃描</button> <button data-action="run">開始／接續</button>
     <button data-action="stop">停止</button></div>
+    <div style="margin-top:6px"><button data-action="scanEnrolled">🔍 掃描我修的課未完成</button></div>
+    <div data-role="enrolled"></div>
     <p data-role="status" aria-live="polite">等待掃描</p>
     <div data-role="queue"></div>
     <details><summary>播放與接續設定</summary>
@@ -224,8 +226,15 @@
     throw new Error(message);
   }
   const choose = (selector, regex) => [...document.querySelectorAll(selector)].find(el => visible(el) && !el.disabled && regex.test(el.textContent.trim()));
-  const courseURL = location.href;
-  const COURSE_HASH = location.hash.match(/^#\/learning\/[^/?]+/)?.[0];
+  let courseURL = location.href;
+  let COURSE_HASH = location.hash.match(/^#\/learning\/[^/?]+/)?.[0];
+  // v9.14：半自動跨課程時，於你主動進入新課後重新定位「目前這門課」。仍保留「離開課程就停」的安全檢查。
+  function rescopeCourse() {
+    courseURL = location.href;
+    COURSE_HASH = location.hash.match(/^#\/learning\/[^/?]+/)?.[0];
+    verifiedItem = null; activeItemKey = null; queue = [];
+    renderQueue();
+  }
   function ensureCourse() {
     if (location.hash.match(/^#\/learning\/[^/?]+/)?.[0] !== COURSE_HASH) throw new Error(location.hash.startsWith('#/home') ? '已返回首頁，可能是平台閒置檢查或自行離開。請自行回到課程並核對平台提示；不自動重入或偽造活動。' : '已離開原課程，停止。');
   }
@@ -333,6 +342,98 @@
       note(queue.length ? `找到 ${queue.length} 項；按「開始／接續」，程式會點開並判斷內容，不需手選類型。` : '未找到章節。請展開右側「課程章節」，再掃描；仍失敗時按「下載診斷」。');
       reposition();
     } finally { scanning = false; phase = 'idle'; }
+  }
+  // v9.14：掃描「我修的課」所有分頁，列出未完成（進行中）課程並附勾選框；配合「進入下一門勾選的課」半自動依序完成。
+  // 僅讀取頁面與點擊課程連結；影片仍正常速度實播、知識測驗仍需你的 API Key，不偽造任何紀錄。
+  function renderEnrolled(list) {
+    const box = $('enrolled'); if (!box) return; box.replaceChildren();
+    if (!list.length) return;
+    const title = document.createElement('div');
+    title.style.cssText = 'margin:8px 0 4px;font-weight:bold;color:#fbbf24';
+    title.textContent = '未完成課程（勾選要完成的）：';
+    box.append(title);
+    list.forEach(name => {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:block;margin:3px 0;font-size:12px';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = true; cb.dataset.course = name;
+      lab.append(cb, document.createTextNode(' ' + name));
+      box.append(lab);
+    });
+    const btn = document.createElement('button');
+    btn.dataset.action = 'enterNext'; btn.textContent = '▶ 進入下一門勾選的課';
+    btn.style.marginTop = '6px';
+    box.append(btn);
+  }
+  async function pagerFirst(wait) {
+    for (let g = 0; g < 12; g++) {
+      const prev = [...(document.querySelector('mat-paginator')?.querySelectorAll('button') || [])].find(b => b.getAttribute('aria-label') === '上一頁');
+      if (prev && !prev.disabled) { prev.click(); await wait(1000); } else break;
+    }
+  }
+  function pageIncomplete() {
+    const out = [];
+    const rows = [...document.querySelectorAll('tr')].filter(r => [...r.querySelectorAll('td')].some(td => /從\s*\d{4}[\s\S]*到/.test(td.textContent)));
+    for (const r of rows) {
+      const tds = [...r.querySelectorAll('td')];
+      const texts = tds.map(td => cleanText(td.textContent));
+      const name = texts.find(t => /\[.*\]/.test(t)) || texts.find((t, i) => i > 0 && t.length > 5 && !/,教育|科學|^從|^到|^\d+$/.test(t));
+      const status = texts.find(t => /^(通過|進行中|未通過|未完成)$/.test(t));
+      if (name && status && /進行中|未完成|未通過/.test(status)) {
+        const cell = tds.find(td => /\[.*\]/.test(td.textContent)) || tds.find(td => cleanText(td.textContent).slice(0, 30) === name.slice(0, 30)) || r;
+        out.push({ name: name.slice(0, 30), el: cell });
+      }
+    }
+    return { rows: rows.length, incomplete: out };
+  }
+  async function scanEnrolled() {
+    if (running || scanning) return;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    note('前往「我修的課」掃描所有分頁的未完成課程…');
+    if (!location.hash.startsWith('#/course/my-learning')) { location.hash = '#/course/my-learning'; await wait(2500); }
+    await pagerFirst(wait);
+    const names = [], seen = new Set(); let total = 0;
+    for (let page = 0; page < 12; page++) {
+      let got = { rows: 0, incomplete: [] };
+      for (let i = 0; i < 12; i++) { got = pageIncomplete(); if (got.rows) break; await wait(400); }
+      total += got.rows;
+      for (const c of got.incomplete) if (!seen.has(c.name)) { seen.add(c.name); names.push(c.name); }
+      const next = [...(document.querySelector('mat-paginator')?.querySelectorAll('button') || [])].find(b => b.getAttribute('aria-label') === '下一頁');
+      if (next && !next.disabled) { next.click(); await wait(1500); } else break;
+    }
+    await pagerFirst(wait);
+    renderEnrolled(names);
+    if (!total) { note('⚠️ 未讀到「我修的課」表格，請確認已登入後重試。'); return; }
+    if (!names.length) { note(`✅ 掃描 ${total} 門課（含各頁），未發現未完成課程。`); return; }
+    note(`⚠️ 共 ${names.length} 門未完成（已預設勾選）。取消不想做的，按「▶ 進入下一門勾選的課」逐一完成。`);
+  }
+  async function enterNextSelected() {
+    if (running || scanning) return;
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+    const box = $('enrolled');
+    const checked = box ? [...box.querySelectorAll('input[type="checkbox"]')].filter(c => c.checked).map(c => c.dataset.course) : [];
+    if (!checked.length) { note('沒有勾選任何課程；請先「🔍 掃描我修的課未完成」並勾選。'); return; }
+    note('前往「我修的課」尋找下一門未完成的勾選課程…');
+    if (!location.hash.startsWith('#/course/my-learning')) { location.hash = '#/course/my-learning'; await wait(2500); }
+    await pagerFirst(wait);
+    let target = null;
+    for (let page = 0; page < 12 && !target; page++) {
+      let got = { rows: 0, incomplete: [] };
+      for (let i = 0; i < 12; i++) { got = pageIncomplete(); if (got.rows) break; await wait(400); }
+      target = got.incomplete.find(c => checked.includes(c.name));
+      if (target) break;
+      const next = [...(document.querySelector('mat-paginator')?.querySelectorAll('button') || [])].find(b => b.getAttribute('aria-label') === '下一頁');
+      if (next && !next.disabled) { next.click(); await wait(1500); } else break;
+    }
+    if (!target) { note('✅ 勾選的課程都已不在未完成清單（平台狀態已非進行中）。'); return; }
+    note(`進入《${target.name}》…`);
+    target.el.scrollIntoView({ block: 'center' }); await wait(400); target.el.click();
+    for (let i = 0; i < 30; i++) { if (/^#\/learning\/[^/?]+/.test(location.hash)) break; await wait(500); }
+    if (!/^#\/learning\/[^/?]+/.test(location.hash)) { note('⚠️ 進入課程逾時，請手動點該課再重試。'); return; }
+    await wait(1800);
+    rescopeCourse();
+    await scan();
+    note(`已進入《${target.name}》並掃描完畢。請按「開始／接續」完成本門；完成後再按「▶ 進入下一門勾選的課」。`);
   }
   function documents() {
     const docs = [document];
@@ -571,17 +672,19 @@
     renderQueue();
   }
   function questions() {
+    // v9.13：也納入「簡答題」（只有 textarea／單行文字框、無選項）的題目，否則問卷最後的簡答題無法填寫、「繳交作答」不出現、問卷卡死。
     const wraps = [...document.querySelectorAll('div.question-wrap, [class*="survey-question"], [class*="question-item"], fieldset')]
-      .filter(el => visible(el) && el.querySelector('input[type="radio"], input[type="checkbox"]'));
+      .filter(el => visible(el) && el.querySelector('input[type="radio"], input[type="checkbox"], textarea, input[type="text"]'));
     return wraps.filter(el => !wraps.some(other => other !== el && el.contains(other))).map(wrap => {
       const options = [...wrap.querySelectorAll('label')].filter(el => visible(el) && el.innerText.trim() &&
         (el.querySelector('input[type="radio"], input[type="checkbox"]') || (el.htmlFor && wrap.ownerDocument.getElementById(el.htmlFor)?.matches('input[type="radio"], input[type="checkbox"]'))));
+      const textInput = options.length ? null : (wrap.querySelector('textarea, input[type="text"]') || null);
       const text = wrap.innerText.trim();
       const stem = wrap.cloneNode(true);
       stem.querySelectorAll('label,input,button,select,textarea').forEach(el => el.remove());
       const prompt = cleanText(stem.textContent) || text;
-      const names = [...wrap.querySelectorAll('input')].map(input => input.name).join('|');
-      return { wrap, options, text: prompt, signature: `${names}\n${prompt}\n${options.map(el => el.innerText.trim()).join('\n')}` };
+      const names = [...wrap.querySelectorAll('input,textarea')].map(input => input.name).join('|');
+      return { wrap, options, textInput, text: prompt, signature: `${names}\n${prompt}\n${options.map(el => el.innerText.trim()).join('\n')}` };
     });
   }
   function question() { return questions()[0] || null; }
@@ -651,13 +754,14 @@
     phase = 'answering';
     assertActive(item);
     const answeredQuestions = new Set();
+    const SURVEY_TEXT = '內容清楚實用，受益良多，謝謝。'; // v9.13：問卷簡答題自動填入的中性回饋，可自行修改
     // v9.12.1：MOOCS 問卷／測驗按「開始填寫／進入測驗」後會停在「問卷讀取中」，實測可達 10–40 秒才渲染出題目。
     // 因此把等待上限拉到 90 秒；題目尚未出現、封面仍在而「讀取中」字樣已消失時，容許再點一次進入鈕（避免只按一次就乾等到逾時）。
     let lastClick = 0;
     await waitFor(() => {
       assertActive(item);
       if (document.hidden) return false;
-      if (question()?.options.length) return true;
+      if (question()?.options.length || question()?.textInput) return true; // v9.13：簡答題開頭的問卷也算載入完成
       const cover = taskCover();
       const loading = /讀取中/.test(cover?.textContent || '');
       const enter = choose('button,a,[role="button"]', /^(進入測驗|開始測驗|開始填寫|填寫問卷|開始問卷)$/);
@@ -669,32 +773,42 @@
       await foreground('操作測驗／問卷');
       assertActive(item);
       const q = questions().find(entry => !answeredQuestions.has(entry.signature));
-      if (!q?.options.length) throw new Error('題目或選項無法辨識。');
-      note(`測驗 ${item.title}：第 ${index + 1} 題`);
-      const useFirst = subjective(q);
-      if (!useFirst && (!settings.ai || !settings.key || !settings.model)) {
-        $('ai').closest('details').open = true;
-        throw new Error('這是客觀題，需要在「作答設定」輸入 API Key，再按開始／接續。主觀問卷可不使用 AI。');
+      if (!q) throw new Error('題目無法辨識。');
+      note(`${item.type === 'survey' ? '問卷' : '測驗'} ${item.title}：第 ${index + 1} 題`);
+      if (q.textInput) {
+        // v9.13：簡答題（文字框）無選項 → 填入一句中性回饋，否則「繳交作答」不會出現、問卷無法送出。
+        await foreground('填寫簡答'); assertActive(item); stopped();
+        const ta = q.textInput;
+        const proto = ta.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(ta, SURVEY_TEXT);
+        for (const evt of ['input', 'change', 'blur']) ta.dispatchEvent(new Event(evt, { bubbles: true }));
+        await sleep(300);
+        if (!ta.value) throw new Error('簡答題文字未成功填入，停止。');
+        note('簡答題：已填入簡短回饋。');
+      } else {
+        if (!q.options.length) throw new Error('題目或選項無法辨識。');
+        // v9.13：問卷（survey）一律選「最上面」（第一個）選項；只有測驗的客觀題才用 AI 判斷。
+        const useFirst = item.type === 'survey' || subjective(q);
+        if (!useFirst && (!settings.ai || !settings.key || !settings.model)) {
+          $('ai').closest('details').open = true;
+          throw new Error('這是客觀題，需要在「作答設定」輸入 API Key，再按開始／接續。主觀問卷可不使用 AI。');
+        }
+        const answers = useFirst ? [0] : await ask(q, settings);
+        await foreground('填入答案');
+        assertActive(item);
+        if (useFirst) note(item.type === 'survey' ? '問卷：已選最上面的選項。' : '依主觀題偏好，選第一個選項。');
+        stopped();
+        if (!questions().some(entry => entry.wrap === q.wrap && entry.signature === q.signature)) throw new Error('等待 AI 期間題目已改變，停止以免選錯題。');
+        for (const [optionIndex, option] of q.options.entries()) {
+          const input = inputFor(option);
+          if (!input || input.disabled) throw new Error('無法找到可操作的答案輸入欄。');
+          const desired = answers.includes(optionIndex);
+          if (input.type === 'checkbox' && input.checked !== desired) input.click();
+          else if (input.type === 'radio' && desired && !input.checked) input.click();
+        }
+        await sleep(300);
+        if (answers.some(i => { const input = inputFor(q.options[i]); return !input?.checked; })) throw new Error('選項沒有成功勾選，停止。');
       }
-      const answers = useFirst ? [0] : await ask(q, settings);
-      await foreground('填入答案');
-      assertActive(item);
-      if (useFirst) note('依你的主觀問卷偏好，選第一個選項。');
-      stopped();
-      if (!questions().some(entry => entry.wrap === q.wrap && entry.signature === q.signature)) throw new Error('等待 AI 期間題目已改變，停止以免選錯題。');
-      for (const [optionIndex, option] of q.options.entries()) {
-        const input = inputFor(option);
-        if (!input || input.disabled) throw new Error('無法找到可操作的答案輸入欄。');
-        const desired = answers.includes(optionIndex);
-        if (input.type === 'checkbox' && input.checked !== desired) input.click();
-        else if (input.type === 'radio' && desired && !input.checked) input.click();
-      }
-      await sleep(300);
-      if (answers.some(i => {
-        const option = q.options[i];
-        const input = inputFor(option);
-        return !input?.checked;
-      })) throw new Error('選項沒有成功勾選，停止。');
       answeredQuestions.add(q.signature);
       if (questions().some(entry => !answeredQuestions.has(entry.signature))) continue;
       const next = [...document.querySelectorAll('button.btn-control.--right')].find(el => visible(el) && !el.disabled) || choose('button', /^(下一題|下一頁|下一|Next)$/);
@@ -702,7 +816,7 @@
         const pageSignature = questions().map(entry => entry.signature).join('\n');
         await foreground('下一題'); assertActive(item); next.click();
         await waitFor(() => questions().map(entry => entry.signature).join('\n') !== pageSignature, 15000, '下一題沒有載入；不強制繳交。');
-        await waitFor(() => question()?.options.length, 15000, '下一題選項尚未載入。');
+        await waitFor(() => question()?.options.length || question()?.textInput, 15000, '下一題尚未載入。'); // v9.13：下一頁可能是簡答題
         answeredQuestions.clear();
         continue;
       }
@@ -787,7 +901,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.12.1', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.14', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -804,7 +918,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.12.1-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.14-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
@@ -813,7 +927,7 @@
   $('engine').onchange = () => { $('model').value = $('engine').value === 'gemini' ? 'gemini-2.5-flash-lite' : 'claude-haiku-4-5-20251001'; };
   root.addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
-    const actions = { scan, run, stop, close, diagnose, download, collapse };
+    const actions = { scan, run, stop, close, diagnose, download, collapse, scanEnrolled, enterNext: enterNextSelected };
     if (actions[action]) Promise.resolve(actions[action](event.isTrusted)).catch(error => note(`停止：${error.message}`));
   });
   window.__moocs911 = { root, close };
