@@ -2,6 +2,7 @@
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
+// v9.12 — 三項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理)。
 (() => {
   'use strict';
   if (location.origin !== 'https://moocs.moe.edu.tw' || !location.hash.includes('/learning/')) {
@@ -21,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.11.2 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.12 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -242,7 +243,7 @@
     }
   }
   const cleanText = text => (text || '').trim().replace(/\s+/g, ' ');
-  const chapterLabel = text => /^(?:EP\s*\d+(?:[-.．]\d+)*[.．、:\s]?|第\s*[\d一二三四五六七八九十]+\s*[章節])|(?:課後問卷|課後測驗|章節測驗|總測驗)/i.test(text);
+  const chapterLabel = text => /^(?:EP\s*\d+(?:[-.．]\d+)*[.．、:\s]?|第\s*[\d一二三四五六七八九十]+\s*[章節])|(?:測驗|測試|考試|評量|問卷|調查)/i.test(text); // v9.12：放寬，含課後評量測驗等命名
   const explicitRowSelector = '.syllabus__list-item, .course-node, mat-expansion-panel li, mat-list-item, [role="listitem"]';
   function rows() {
     const explicit = [...document.querySelectorAll(explicitRowSelector)].filter(visible);
@@ -411,8 +412,11 @@
         const newTask = !!(q && q !== oldQuestion) || !!(task && task !== oldTask);
         const newMedia = !!video && (video !== oldVideo || videoSource(video) !== oldSource || (emptySeen && loaded));
         // 選取樣式單獨不足以證明播放器切換。相同 URL 重載須有載入事件。
+        // v9.12：換章確認不再硬性要求影片已可播放(readyState>=2)，避免慢速課程 30 秒逾時；
+        // 只要「有新來源 + 該章被選取(或檔名相符)」即視為切換成功，實際載入與播放交給 watch 階段。
+        const videoReady = playable(video) || (!!video && !!videoSource(video) && !video.error);
         const verified = kind === 'video'
-          ? (playable(video) || (sameItem && video?.ended && video.readyState >= 2 && videoSource(video) && !video.error)) && (sameItem || newMedia) && (selected || sourceMatchesItem(video, item) === true)
+          ? (videoReady || (sameItem && video?.ended && video.readyState >= 2 && videoSource(video) && !video.error)) && (sameItem || newMedia) && (selected || sourceMatchesItem(video, item) === true)
           : (taskMatch === true || (selected && newTask));
         if (!verified) { stableSince = 0; candidate = null; return false; }
         const identity = kind === 'video' ? video : (q || task);
@@ -739,6 +743,7 @@
       ensureCourse();
       await foreground('開始處理');
       if (startIndex > 0) note(`從目前章節「${queue[startIndex].title}」接續；前面章節未因此標記完成，請自行核對平台紀錄。`);
+      const skippedItems = [];
       for (const item of queue.slice(startIndex)) {
         stopped();
         const current = roster().find(entry => itemMatches(entry, item));
@@ -750,10 +755,26 @@
           else completedItems.add(item.key);
           note(`平台已完成，略過：${item.title}`); renderQueue(); continue;
         }
-        await openItem(item);
-        if (item.type === 'video') await watch(item);
-        else if (item.type === 'survey' || item.type === 'quiz') await quiz(item, settings);
-        else throw new Error('無法辨識此章節的內容；請下載診斷。');
+        try {
+          await openItem(item);
+          if (item.type === 'video') await watch(item);
+          else if (item.type === 'survey' || item.type === 'quiz') await quiz(item, settings);
+          else throw new Error('無法辨識此章節的內容（未知類型）。');
+        } catch (error) {
+          // v9.12：使用者停止、或頁面已離開課程／返回首頁 → 整體停止（這些無法靠跳過救回）。
+          if (error.name === 'AbortError' || /已離開原課程|已返回首頁/.test(error.message || '')) throw error;
+          // 其餘（切換逾時、題型無法辨識、選項無法操作等）→ 記下此項、繼續下一章，不讓單一怪題型拖垮整場。
+          skippedItems.push({ title: item.title, reason: error.message || String(error) });
+          note(`⏭ 跳過「${item.title}」：${error.message}；繼續下一章。`);
+          verifiedItem = null; activeItemKey = null; phase = 'switching';
+          try { await returnToRoster(); } catch (back) { if (back.name === 'AbortError' || /已離開原課程|已返回首頁/.test(back.message || '')) throw back; }
+          renderQueue();
+          continue;
+        }
+      }
+      if (skippedItems.length) {
+        note(`⚠️ 有 ${skippedItems.length} 項未自動完成，需你自行處理：`);
+        skippedItems.forEach(skip => note(`　• ${skip.title}（${skip.reason}）`));
       }
       note(startIndex > 0 ? '從目前章節起處理完畢；請核對前面章節及平台認證條件，這不代表已取得證書。' : '清單處理完畢。請到平台檢查認證條件；這不代表已取得證書。');
     } catch (error) { phase = 'stopped'; verifiedItem = null; activeItemKey = null; note(error.name === 'AbortError' ? '已停止；不會繼續點擊或作答。' : `停止：${error.message}`); }
@@ -761,7 +782,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.11.2', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.12', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -778,7 +799,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.11.2-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.12-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
