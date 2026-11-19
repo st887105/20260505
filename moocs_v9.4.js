@@ -2,7 +2,7 @@
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
-// v9.21 — 修正：是非題選項為圖片（○／✗）無文字導致測驗偵測不到選項、不作答；圖片選項改用索引標註給 AI；測驗背景也繼續作答。承 v9.20 — 關鍵：背景不再暫停，改為「靜音繼續播放／處理」(背景仍累積時數且避免閒置被踢回首頁)；修正背景被誤判略過；測驗讀取等待 90→180 秒。承 v9.19 — 強化：影片元素被 Vime 替換（失焦/重整後）時改為重新接手續看，不再放棄該章；完成等待 90→120 秒。承 v9.18 — 修正：巢狀影片用 Vime 播放器，改為「靜音＋Vime play API」才能自動起播（原生 play 被攔截/自動播放阻擋）。承 v9.17 — 修正：巢狀子章節其實多為「影片」，改為影片實播/PDF翻閱自動判斷。承 v9.16 — 新增「文件/巢狀」課程模式：PDF 閱讀＋單元內子章節逐一完成（獨立流程，不動原本影片/測驗邏輯）。承 v9.15 — 一門完成後自動回「我修的課」目錄，避免閒置 30 分鐘扣時。承 v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
+// v9.22 — 新增：支援 YouTube 嵌入影片章節（強制靜音自動播放＋依平台停留時數認列），修正這類章節被當成「內容未載入」略過。承 v9.21 — 修正：是非題選項為圖片（○／✗）無文字導致測驗偵測不到選項、不作答；圖片選項改用索引標註給 AI；測驗背景也繼續作答。承 v9.20 — 關鍵：背景不再暫停，改為「靜音繼續播放／處理」(背景仍累積時數且避免閒置被踢回首頁)；修正背景被誤判略過；測驗讀取等待 90→180 秒。承 v9.19 — 強化：影片元素被 Vime 替換（失焦/重整後）時改為重新接手續看，不再放棄該章；完成等待 90→120 秒。承 v9.18 — 修正：巢狀影片用 Vime 播放器，改為「靜音＋Vime play API」才能自動起播（原生 play 被攔截/自動播放阻擋）。承 v9.17 — 修正：巢狀子章節其實多為「影片」，改為影片實播/PDF翻閱自動判斷。承 v9.16 — 新增「文件/巢狀」課程模式：PDF 閱讀＋單元內子章節逐一完成（獨立流程，不動原本影片/測驗邏輯）。承 v9.15 — 一門完成後自動回「我修的課」目錄，避免閒置 30 分鐘扣時。承 v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
 (() => {
   'use strict';
   if (location.origin !== 'https://moocs.moe.edu.tw' || !location.hash.includes('/learning/')) {
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.21 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.22 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -860,12 +860,29 @@
       return true;
     };
     const vEl = () => [...document.querySelectorAll('video')].find(x => x.offsetParent) || document.querySelector('video');
+    const ytFrame = () => [...document.querySelectorAll('iframe')].find(f => /(?:youtube\.com|youtu\.be)/.test(f.src || '') && f.offsetParent);
     const handleSub = async (name) => {
       let kind = null;
       const pdfReady = () => !!document.querySelector('.toolbarField.pageNumber') || [...document.querySelectorAll('canvas')].some(c => c.offsetParent);
       try {
-        await waitFor(() => { if (vEl() && (vEl().readyState >= 1 || vEl().currentSrc)) { kind = 'video'; return true; } if (pdfReady()) { kind = 'pdf'; return true; } return false; }, 25000, `「${name}」內容未載入`);
+        await waitFor(() => { if (vEl() && (vEl().readyState >= 1 || vEl().currentSrc)) { kind = 'video'; return true; } if (pdfReady()) { kind = 'pdf'; return true; } if (ytFrame()) { kind = 'youtube'; return true; } return false; }, 25000, `「${name}」內容未載入`);
       } catch (e) { note(`  ⚠️ ${e.message}，略過此章。`); return false; }
+      if (kind === 'youtube') {
+        // v9.22：YouTube 嵌入影片為跨來源 iframe（無 enablejsapi），無法讀取播放/結束事件；平台以「停留在此章節的時數」認列。
+        // 作法：強制「靜音＋自動播放」讓它真實播放（靜音可繞過自動播放阻擋），再停在本章等平台標記 --completed（較長上限）。不加速、不偽造。
+        const frame = ytFrame();
+        note(`  YouTube 影片：${name}（靜音自動播放，依平台停留時數認列）`);
+        try {
+          if (frame && !/[?&]mute=1/.test(frame.src)) {
+            const u = new URL(frame.src);
+            u.searchParams.set('autoplay', '1'); u.searchParams.set('mute', '1');
+            frame.src = u.toString(); // 重載為靜音自動播放（此平台未用 YT JS API，重載不影響時數認列）
+          }
+        } catch { }
+        const ok = await waitCompleted(name, 18 * 60000);
+        if (!liCompleted(name)) note(`  ℹ️ YouTube 章節以停留時數認列，可能需較久；若遲未標記完成，請保持此分頁在前景或稍後再核對。`);
+        return ok;
+      }
       if (kind === 'video') {
         // v9.18：子章節用 Vime 播放器（vm-player）。原生 video.play() 會被 Vime 蓋回暫停、未靜音又觸發自動播放阻擋，
         //        改為「靜音 + 呼叫 Vime player.play()」才會真正播放（靜音僅無聲，仍逐秒正常播放、累積時數，不影響認列）。
@@ -1028,7 +1045,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.21', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.22', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1045,7 +1062,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.21-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.22-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
