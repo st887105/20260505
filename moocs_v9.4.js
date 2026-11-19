@@ -1,4 +1,4 @@
-// MOOCS v9.23.1 — 支援平台巢狀章節的選取與完成 class，修正切章等待。
+// MOOCS v9.23.2 — 解析 AI 回覆中的 JSON 程式碼區塊。
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.23.1 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.23.2 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -684,8 +684,10 @@
   }
   function question() { return questions()[0] || null; }
   function parseAnswers(raw, count, multiple) {
+    const reply = raw.trim();
+    const fenced = reply.match(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```$/i);
     let data;
-    try { data = JSON.parse(raw.trim()); } catch { throw new Error(`AI 回覆不是答案陣列：${raw.slice(0, 80)}`); }
+    try { data = JSON.parse(fenced?.[1] ?? reply); } catch { throw new Error(`AI 回覆不是答案陣列：${reply.slice(0, 80)}`); }
     if (!Array.isArray(data) || !data.length || (!multiple && data.length !== 1) || new Set(data).size !== data.length || data.some(n => !Number.isInteger(n) || n < 0 || n >= count)) {
       throw new Error('AI 回覆包含無效、重複或超出範圍的選項，停止作答。');
     }
@@ -1226,7 +1228,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.23.1', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.23.2', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1243,7 +1245,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23.1-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23.2-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
