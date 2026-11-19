@@ -2,7 +2,7 @@
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
-// v9.18 — 修正：巢狀影片用 Vime 播放器，改為「靜音＋Vime play API」才能自動起播（原生 play 被攔截/自動播放阻擋）。承 v9.17 — 修正：巢狀子章節其實多為「影片」，改為影片實播/PDF翻閱自動判斷。承 v9.16 — 新增「文件/巢狀」課程模式：PDF 閱讀＋單元內子章節逐一完成（獨立流程，不動原本影片/測驗邏輯）。承 v9.15 — 一門完成後自動回「我修的課」目錄，避免閒置 30 分鐘扣時。承 v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
+// v9.19 — 強化：影片元素被 Vime 替換（失焦/重整後）時改為重新接手續看，不再放棄該章；完成等待 90→120 秒。承 v9.18 — 修正：巢狀影片用 Vime 播放器，改為「靜音＋Vime play API」才能自動起播（原生 play 被攔截/自動播放阻擋）。承 v9.17 — 修正：巢狀子章節其實多為「影片」，改為影片實播/PDF翻閱自動判斷。承 v9.16 — 新增「文件/巢狀」課程模式：PDF 閱讀＋單元內子章節逐一完成（獨立流程，不動原本影片/測驗邏輯）。承 v9.15 — 一門完成後自動回「我修的課」目錄，避免閒置 30 分鐘扣時。承 v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
 (() => {
   'use strict';
   if (location.origin !== 'https://moocs.moe.edu.tw' || !location.hash.includes('/learning/')) {
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.18 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.19 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -872,32 +872,35 @@
         await waitFor(() => { if (vEl() && (vEl().readyState >= 1 || vEl().currentSrc)) { kind = 'video'; return true; } if (pdfReady()) { kind = 'pdf'; return true; } return false; }, 25000, `「${name}」內容未載入`);
       } catch (e) { note(`  ⚠️ ${e.message}，略過此章。`); return false; }
       if (kind === 'video') {
-        const video = vEl();
-        // v9.18：子章節用 Vime 播放器（vm-player）。直接呼叫原生 video.play() 會被 Vime 蓋回暫停、
-        // 且未靜音時觸發瀏覽器自動播放阻擋(NotAllowedError)。改為「靜音 + 呼叫 Vime player.play()」才會真正播放。
-        // 靜音僅是沒有聲音，影片仍逐秒正常播放、累積閱讀/觀看時數，不影響平台認列；需要聲音可自行取消靜音。
-        const player = video.closest('vm-player') || document.querySelector('vm-player');
+        // v9.18：子章節用 Vime 播放器（vm-player）。原生 video.play() 會被 Vime 蓋回暫停、未靜音又觸發自動播放阻擋，
+        //        改為「靜音 + 呼叫 Vime player.play()」才會真正播放（靜音僅無聲，仍逐秒正常播放、累積時數，不影響認列）。
+        // v9.19：失去焦點/重整後 Vime 可能「替換」影片元素；故每輪重新取得 video/player，元素被換掉就重新接手續看，不再放棄本章。
+        const getPlayer = () => { const vv = vEl(); return (vv && vv.closest('vm-player')) || document.querySelector('vm-player'); };
         const startPlay = async () => {
+          const vd = vEl(); if (!vd) return;
+          const player = getPlayer();
           try { if (player) player.muted = true; } catch { }
-          try { video.muted = true; } catch { }
-          if (video.playbackRate !== 1) video.playbackRate = 1;
-          try { const pr = (player && typeof player.play === 'function') ? player.play() : video.play(); if (pr && pr.then) await pr; }
-          catch { try { await video.play(); } catch { } }
+          try { vd.muted = true; } catch { }
+          if (vd.playbackRate !== 1) vd.playbackRate = 1;
+          try { const pr = (player && typeof player.play === 'function') ? player.play() : vd.play(); if (pr && pr.then) await pr; }
+          catch { try { await vd.play(); } catch { } }
         };
-        note(`  影片：${name}（約 ${Math.round((video.duration || 0) / 60)} 分，靜音正常速度實播）`);
-        await startPlay();
-        await sleep(1200);
-        if (video.paused || video.currentTime < 0.3) { await startPlay(); await sleep(1200); }
-        if (video.paused || video.currentTime < 0.3) note('  ⚠️ 影片未能自動起播；請在播放器按一次播放，之後自動接續。');
-        let last = video.currentTime, lastAdvance = Date.now();
+        note(`  影片：${name}（約 ${Math.round((vEl()?.duration || 0) / 60)} 分，靜音正常速度實播）`);
+        await startPlay(); await sleep(1200);
+        if ((vEl()?.paused) || (vEl()?.currentTime || 0) < 0.3) { await startPlay(); await sleep(1200); }
+        if ((vEl()?.paused) || (vEl()?.currentTime || 0) < 0.3) note('  ⚠️ 影片未能自動起播；請保持此分頁在前景，或在播放器按一次播放，之後自動接續。');
+        let last = vEl()?.currentTime || 0, lastAdvance = Date.now(), gone = 0;
         while (true) {
           stopped(); ensureCourse(); await foreground('觀看影片');
-          const cur = vEl();
-          if (!cur || cur !== video || !video.isConnected) { note('  播放器已更換，停止此章監看。'); break; }
+          const video = vEl();
+          if (!video) { if (++gone > 12) { note('  找不到播放器（內容可能已切換），結束本章監看。'); break; } await sleep(1500); continue; }
+          gone = 0;
           if (video.playbackRate !== 1) video.playbackRate = 1;
           if (video.ended) break;
-          if (video.paused) await startPlay(); // 被暫停就重新靜音起播
-          if (video.currentTime > last + 0.1) { last = video.currentTime; lastAdvance = Date.now(); }
+          if (video.paused) await startPlay(); // 被暫停（含元素替換後）就重新靜音起播
+          const t = video.currentTime;
+          if (t < last - 2) { last = t; lastAdvance = Date.now(); } // 元素被替換、進度歸零：視為新起點，不誤判卡住
+          else if (t > last + 0.1) { last = t; lastAdvance = Date.now(); }
           if (Date.now() - lastAdvance > 180000) { note('  影片超過 3 分鐘未前進（暫停或緩衝），略過此章。'); return false; }
           await sleep(1500);
         }
@@ -911,7 +914,7 @@
           const nb = nextBtn(); if (nb) { nb.click(); await sleep(800); } else break;
         }
       }
-      return await waitCompleted(name, 90000);
+      return await waitCompleted(name, 120000);
     };
     const totalTops = [...document.querySelectorAll('mat-expansion-panel-header.course-node')].length;
     const skipped = [];
@@ -1030,7 +1033,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.18', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.19', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1047,7 +1050,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.18-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.19-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
