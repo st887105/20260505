@@ -1,4 +1,4 @@
-// MOOCS v9.23 — 修正巢狀課程分流、測驗完成狀態與接續行為。
+// MOOCS v9.23.1 — 支援平台巢狀章節的選取與完成 class，修正切章等待。
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.23 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.23.1 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -203,11 +203,12 @@
     const timer = setTimeout(() => { signal?.removeEventListener('abort', cancel); resolve(); }, ms);
     signal?.addEventListener('abort', cancel, { once: true });
   });
-  async function waitFor(fn, timeout, message) {
+  async function waitFor(fn, timeout, message, { wallClock = false } = {}) {
     let remaining = timeout;
-    while (remaining > 0) {
+    const deadline = wallClock ? Date.now() + timeout : Infinity;
+    while (remaining > 0 && Date.now() < deadline) {
       stopped(); ensureCourse();
-      // 背景等待不耗用載入期限，也不在背景操作測驗或切章。
+      // 一般載入按前景執行時間計算。巢狀切章確認另設實際時間上限。
       await foreground('等待內容載入');
       const value = fn();
       if (value) return value;
@@ -869,7 +870,7 @@
     const matches = el => visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' &&
       pattern.test(cleanText(el.textContent));
     return [...(taskCover()?.querySelectorAll(taskButtons) || [])].find(matches) ||
-      [...document.querySelectorAll(taskButtons)].find(matches);
+      [...document.querySelectorAll(taskButtons)].find(el => !el.closest(nestedRowSelector) && matches(el));
   }
   const quizAction = () => taskControl(quizEntry) || taskControl(retakeEntry);
 
@@ -882,8 +883,11 @@
   };
   const nestedTitle = row => cleanText(row.querySelector('.course-node__title, [class*="title"]')?.textContent || row.textContent)
     .replace(/(?:\s*(?:未測驗|尚未測驗|未通過|不合格|未合格|已通過|測驗通過|測驗合格|未填寫|已填寫|未提交|已提交|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%|\d+(?:\.\d+)?\s*pt\s*[\/／]\s*\d+(?:\.\d+)?\s*pt))+$/i, '').trim();
+  const syllabusFlag = (el, flag) =>
+    el.classList.contains(`syllabus__list-item--${flag}`) || el.classList.contains(`--${flag}`);
   const nestedSelected = row => [row, rowLink(row)].some(el =>
-    el.matches('.--active, .--selected, .--current, .active, .selected, [aria-selected="true"], [aria-current="true"], [aria-current="page"]'));
+    ['active', 'selected', 'current'].some(flag => syllabusFlag(el, flag)) ||
+    el.matches('.active, .selected, [aria-selected="true"], [aria-current="true"], [aria-current="page"]'));
   const currentNestedRows = () => nestedHeaders().flatMap(nestedRows).filter(nestedSelected);
 
   function nestedItemRow(item) {
@@ -923,9 +927,9 @@
     }
     if (kind === 'survey') {
       if (/未填寫|未提交|未送出|未完成/.test(evidence)) return false;
-      return row.classList.contains('--completed') || /已填寫|已提交|已送出|已完成問卷/.test(evidence);
+      return syllabusFlag(row, 'completed') || /已填寫|已提交|已送出|已完成問卷/.test(evidence);
     }
-    return row.classList.contains('--completed') || videoRecorded(evidence);
+    return syllabusFlag(row, 'completed') || videoRecorded(evidence);
   }
 
   const youtubeFrame = () => [...document.querySelectorAll('iframe[src]')].find(frame =>
@@ -995,7 +999,7 @@
         return false;
       }
       return Date.now() - stableSince >= 600 && content;
-    }, 25000, '無法確認這個章節的內容已載入。');
+    }, 25000, '25 秒內無法確認章節已選取且內容已載入。', { wallClock: true });
   }
 
   async function waitNestedRecorded(item, capMs) {
@@ -1222,7 +1226,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.23', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.23.1', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1239,7 +1243,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23.1-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
