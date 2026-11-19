@@ -2,7 +2,7 @@
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
-// v9.19 — 強化：影片元素被 Vime 替換（失焦/重整後）時改為重新接手續看，不再放棄該章；完成等待 90→120 秒。承 v9.18 — 修正：巢狀影片用 Vime 播放器，改為「靜音＋Vime play API」才能自動起播（原生 play 被攔截/自動播放阻擋）。承 v9.17 — 修正：巢狀子章節其實多為「影片」，改為影片實播/PDF翻閱自動判斷。承 v9.16 — 新增「文件/巢狀」課程模式：PDF 閱讀＋單元內子章節逐一完成（獨立流程，不動原本影片/測驗邏輯）。承 v9.15 — 一門完成後自動回「我修的課」目錄，避免閒置 30 分鐘扣時。承 v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
+// v9.20 — 關鍵：背景不再暫停，改為「靜音繼續播放／處理」(背景仍累積時數且避免閒置被踢回首頁)；修正背景被誤判略過；測驗讀取等待 90→180 秒。承 v9.19 — 強化：影片元素被 Vime 替換（失焦/重整後）時改為重新接手續看，不再放棄該章；完成等待 90→120 秒。承 v9.18 — 修正：巢狀影片用 Vime 播放器，改為「靜音＋Vime play API」才能自動起播（原生 play 被攔截/自動播放阻擋）。承 v9.17 — 修正：巢狀子章節其實多為「影片」，改為影片實播/PDF翻閱自動判斷。承 v9.16 — 新增「文件/巢狀」課程模式：PDF 閱讀＋單元內子章節逐一完成（獨立流程，不動原本影片/測驗邏輯）。承 v9.15 — 一門完成後自動回「我修的課」目錄，避免閒置 30 分鐘扣時。承 v9.14 — 新增「我修的課」全分頁掃描 + 勾選半自動依序完成（跨課程重新定位，維持離開即停的安全檢查）。承 v9.13 — 修正問卷簡答題(文字框)無法填寫導致問卷卡死；問卷一律選最上面選項；新增「掃描我修的課未完成」。承 v9.12.1 — 四項通用強化：①換章確認放寬(不卡慢速載入) ②章節/測驗/問卷標題辨識放寬 ③遇到無法辨識的題型就跳過並記錄、不中斷整場(新題型的實際作答仍由使用者自行判斷處理) ④測驗／問卷「讀取中」等待上限 20→90 秒並允許重按進入鈕(修正課後測驗/問卷被跳過)。
 (() => {
   'use strict';
   if (location.origin !== 'https://moocs.moe.edu.tw' || !location.hash.includes('/learning/')) {
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.19 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.20 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -68,27 +68,15 @@
     lastHeartbeat = now;
     return lastExecutionGap;
   }
+  let bgNoted = false;
   async function foreground(reason) {
     stopped(); ensureCourse();
-    if (!document.hidden) return;
-    const previousPhase = phase;
-    phase = 'waiting-foreground';
-    note(`${reason}：等待分頁回到前景；不在背景切章或啟動播放。`);
-    const signal = controller?.signal;
-    await new Promise((resolve, reject) => {
-      const cleanup = () => {
-        document.removeEventListener('visibilitychange', changed);
-        signal?.removeEventListener('abort', cancelled);
-      };
-      const cancelled = () => { cleanup(); reject(new DOMException('已停止', 'AbortError')); };
-      const changed = () => { if (!document.hidden) { cleanup(); resolve(); } };
-      document.addEventListener('visibilitychange', changed);
-      signal?.addEventListener('abort', cancelled, { once: true });
-      if (signal?.aborted) cancelled(); else changed();
-    });
-    stopped(); ensureCourse(); heartbeat();
-    phase = previousPhase;
-    note('已回到前景，自動接續檢查。');
+    if (!document.hidden) { bgNoted = false; return; }
+    // v9.20：背景時不再暫停等待。靜音影片在背景仍會持續播放，平台依心跳累積時數（實測可達 89%+），
+    //        且「持續播放＝有活動」可避免 30 分鐘閒置被導回首頁——這是今天上午之前一直停掉的主因。
+    //        仍為正常速度實播、不加速、不偽造；惟背景認列未必即時/完整，完成後請自行核對閱讀時數是否達 100%。
+    if (!bgNoted) { note(`${reason}：分頁在背景，仍以靜音繼續播放／處理（背景認列未必即時，完成後請核對閱讀時數）。`); bgNoted = true; }
+    heartbeat();
   }
   function assertActive(item, video = null) {
     ensureCourse(); stopped();
@@ -768,7 +756,7 @@
       // 有進入鈕、且不在讀取中時才點；每次點擊間隔至少 8 秒，讀取中就耐心等。
       if (enter && !loading && Date.now() - lastClick > 8000) { stopped(); enter.click(); lastClick = Date.now(); }
       return false;
-    }, 90000, '按下進入後，題目超過 90 秒仍未載入（平台「問卷讀取中」卡住）。此項跳過，請稍後自行手動開啟。');
+    }, 180000, '按下進入後，題目超過 180 秒仍未載入（平台「問卷讀取中」卡住）。此項跳過，請稍後自行手動開啟。');
     for (let index = 0; index < 100; index++) {
       await foreground('操作測驗／問卷');
       assertActive(item);
@@ -1033,7 +1021,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.19', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.20', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1050,7 +1038,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.19-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.20-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
