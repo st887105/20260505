@@ -1,4 +1,4 @@
-// MOOCS v9.11.2 — 自動辨識章節；客觀題 AI 判斷；主觀問卷依使用者指定選第一項。
+// MOOCS v9.23 — 修正巢狀課程分流、測驗完成狀態與接續行為。
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.22 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.23 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -80,6 +80,11 @@
   }
   function assertActive(item, video = null) {
     ensureCourse(); stopped();
+    if (item.nested) {
+      assertNestedSelection(item);
+      if (taskMatchesItem(item) === false) throw new Error('測驗／問卷內容已切換，停止。');
+      return;
+    }
     const entries = roster();
     const selected = entries.filter(entry => rowSelected(entry.row));
     if (selected.some(entry => entry.key !== item.key) ||
@@ -292,7 +297,7 @@
       if (url && (url.origin !== location.origin || !url.hash.startsWith(COURSE_HASH))) return [];
       const text = cleanText(row.textContent);
       let title = cleanText(row.querySelector('.course-node__title, [class*="title"]')?.textContent || text);
-      title = title.replace(/\s*(?:未測驗|已填寫|已提交|測驗合格|已通過|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%)\s*$/g, '').trim();
+      title = title.replace(/\s*(?:未測驗|未通過|未合格|不合格|已填寫|已提交|測驗合格|已通過|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%)\s*$/g, '').trim();
       if (!title) return [];
       const key = url && url.href !== courseURL ? `url:${url.href}` : `title:${title}`;
       if (seen.has(key)) return [];
@@ -740,8 +745,11 @@
   }
   const inputFor = option => option.querySelector('input[type="radio"], input[type="checkbox"]') || (option.htmlFor ? option.ownerDocument.getElementById(option.htmlFor) : null);
   function taskComplete(item) {
-    const row = roster().find(entry => itemMatches(entry, item));
-    if (taskRecorded(row)) return true;
+    if (item.nested) {
+      const row = assertNestedSelection(item);
+      const cover = taskMatchesItem(item) === true ? taskCover() : null;
+      if (nestedRecorded(row, item.type, cover)) return true;
+    } else if (taskRecorded(roster().find(entry => itemMatches(entry, item)))) return true;
     if (item.type === 'quiz') return !!confirmedResult();
     return [...document.querySelectorAll('[role="dialog"], [class*="result"], [class*="success"], [class*="survey"], [class*="questionnaire"]')]
       .filter(visible).some(el => /感謝.{0,12}填寫|填寫完成|問卷已送出|提交成功|送出成功|已完成問卷/.test(el.innerText));
@@ -753,15 +761,29 @@
     const SURVEY_TEXT = '內容清楚實用，受益良多，謝謝。'; // v9.13：問卷簡答題自動填入的中性回饋，可自行修改
     // v9.12.1：MOOCS 問卷／測驗按「開始填寫／進入測驗」後會停在「問卷讀取中」，實測可達 10–40 秒才渲染出題目。
     // 因此把等待上限拉到 90 秒；題目尚未出現、封面仍在而「讀取中」字樣已消失時，容許再點一次進入鈕（避免只按一次就乾等到逾時）。
-    let lastClick = 0;
+    let lastClick = 0, retakeClicked = false;
     await waitFor(() => {
       assertActive(item);
-      if (question()?.options.length || question()?.textInput) return true; // v9.13：簡答題開頭的問卷也算載入完成；v9.21：背景也繼續偵測作答
+      const q = question();
+      const ready = item.nested
+        ? q?.options.some(option => inputFor(option)?.disabled === false) || (q?.textInput && !q.textInput.disabled)
+        : q?.options.length || q?.textInput;
+      if (ready) return true;
       const cover = taskCover();
       const loading = /讀取中/.test(cover?.textContent || '');
-      const enter = choose('button,a,[role="button"]', /^(進入測驗|開始測驗|開始填寫|填寫問卷|開始問卷)$/);
-      // 有進入鈕、且不在讀取中時才點；每次點擊間隔至少 8 秒，讀取中就耐心等。
-      if (enter && !loading && Date.now() - lastClick > 8000) { stopped(); enter.click(); lastClick = Date.now(); }
+      const enter = item.nested
+        ? item.type === 'survey' ? taskControl(surveyEntry) : quizAction()
+        : choose(taskButtons, /^(進入測驗|開始測驗|開始填寫|填寫問卷|開始問卷)$/);
+      const retake = enter && retakeEntry.test(cleanText(enter.textContent));
+      if (item.nested && item.type === 'quiz' && !lastClick && !enter && !loading && taskControl(quizReview)) {
+        throw new Error('平台目前只顯示答案檢視。請在此章開啟可作答的測驗後，再按「開始／接續」。');
+      }
+      if (enter && !loading && !retakeClicked && Date.now() - lastClick > 8000) {
+        stopped();
+        retakeClicked = !!retake;
+        lastClick = Date.now();
+        enter.click();
+      }
       return false;
     }, 180000, '按下進入後，題目超過 180 秒仍未載入（平台「問卷讀取中」卡住）。此項跳過，請稍後自行手動開啟。');
     for (let index = 0; index < 100; index++) {
@@ -830,176 +852,331 @@
       }, 25000, '已送出，但未看到明確通過／問卷完成結果。請查看平台提示；不自動重測。');
       note(`平台顯示${item.type === 'survey' ? '問卷完成' : '測驗通過'}：${item.title}`);
       completedItems.add(item.key);
-      await returnToRoster();
+      if (!item.nested) await returnToRoster();
       return;
     }
     throw new Error('已到測驗題數上限。');
   }
-  // v9.16：文件/巢狀課程模式（PDF 閱讀 + 單元內子章節）。與影片/測驗邏輯完全分開；只有偵測到子章節 LI 時才走此流程。
-  // 僅正常翻頁、正常停留累積「閱讀時數」，以平台自己的 --completed 標記為完成依據，不加速、不偽造任何紀錄。知識測驗仍需 API Key。
-  async function runDocument(settings) {
-    note('偵測到「巢狀」課程：逐一開啟單元內子章節，影片正常速度實播、PDF 翻閱，依平台標記完成（不加速、不偽造）。');
-    const docDone = new Set();
-    const expandHeader = async (idx) => {
-      const hs = [...document.querySelectorAll('mat-expansion-panel-header.course-node')];
-      const h = hs[idx]; if (!h) return null;
-      const panel = h.closest('mat-expansion-panel');
-      if (panel && !panel.classList.contains('mat-expanded')) { h.click(); await sleep(700); }
-      return h;
-    };
-    // v9.17：子章節可能是「影片」或「PDF」。影片→正常速度實播到結束；PDF→翻完所有頁。之後等平台 --completed 標記。
-    const liCompleted = (name) => [...document.querySelectorAll('li.syllabus__list-item')].some(el => cleanText(el.textContent).slice(0, 30) === name && /--completed/.test(el.className));
-    const waitCompleted = async (name, capMs) => {
-      const cap = Date.now() + capMs;
-      while (Date.now() < cap) {
-        stopped(); ensureCourse(); await foreground('等待平台標記完成');
-        if (liCompleted(name)) { note(`  ✅ 平台已標記完成：${name}`); return true; }
-        await sleep(4000);
-      }
-      note(`  ⏳「${name}」內容已完成播放/閱讀，平台尚未標記完成（達等待上限）。接續下一章，請自行核對。`);
-      return true;
-    };
-    const vEl = () => [...document.querySelectorAll('video')].find(x => x.offsetParent) || document.querySelector('video');
-    const ytFrame = () => [...document.querySelectorAll('iframe')].find(f => /(?:youtube\.com|youtu\.be)/.test(f.src || '') && f.offsetParent);
-    const handleSub = async (name) => {
-      let kind = null;
-      const pdfReady = () => !!document.querySelector('.toolbarField.pageNumber') || [...document.querySelectorAll('canvas')].some(c => c.offsetParent);
-      try {
-        await waitFor(() => { if (vEl() && (vEl().readyState >= 1 || vEl().currentSrc)) { kind = 'video'; return true; } if (pdfReady()) { kind = 'pdf'; return true; } if (ytFrame()) { kind = 'youtube'; return true; } return false; }, 25000, `「${name}」內容未載入`);
-      } catch (e) { note(`  ⚠️ ${e.message}，略過此章。`); return false; }
-      if (kind === 'youtube') {
-        // v9.22：YouTube 嵌入影片為跨來源 iframe（無 enablejsapi），無法讀取播放/結束事件；平台以「停留在此章節的時數」認列。
-        // 作法：強制「靜音＋自動播放」讓它真實播放（靜音可繞過自動播放阻擋），再停在本章等平台標記 --completed（較長上限）。不加速、不偽造。
-        const frame = ytFrame();
-        note(`  YouTube 影片：${name}（靜音自動播放，依平台停留時數認列）`);
-        try {
-          if (frame && !/[?&]mute=1/.test(frame.src)) {
-            const u = new URL(frame.src);
-            u.searchParams.set('autoplay', '1'); u.searchParams.set('mute', '1');
-            frame.src = u.toString(); // 重載為靜音自動播放（此平台未用 YT JS API，重載不影響時數認列）
-          }
-        } catch { }
-        const ok = await waitCompleted(name, 18 * 60000);
-        if (!liCompleted(name)) note(`  ℹ️ YouTube 章節以停留時數認列，可能需較久；若遲未標記完成，請保持此分頁在前景或稍後再核對。`);
-        return ok;
-      }
-      if (kind === 'video') {
-        // v9.18：子章節用 Vime 播放器（vm-player）。原生 video.play() 會被 Vime 蓋回暫停、未靜音又觸發自動播放阻擋，
-        //        改為「靜音 + 呼叫 Vime player.play()」才會真正播放（靜音僅無聲，仍逐秒正常播放、累積時數，不影響認列）。
-        // v9.19：失去焦點/重整後 Vime 可能「替換」影片元素；故每輪重新取得 video/player，元素被換掉就重新接手續看，不再放棄本章。
-        const getPlayer = () => { const vv = vEl(); return (vv && vv.closest('vm-player')) || document.querySelector('vm-player'); };
-        const startPlay = async () => {
-          const vd = vEl(); if (!vd) return;
-          const player = getPlayer();
-          try { if (player) player.muted = true; } catch { }
-          try { vd.muted = true; } catch { }
-          if (vd.playbackRate !== 1) vd.playbackRate = 1;
-          try { const pr = (player && typeof player.play === 'function') ? player.play() : vd.play(); if (pr && pr.then) await pr; }
-          catch { try { await vd.play(); } catch { } }
-        };
-        note(`  影片：${name}（約 ${Math.round((vEl()?.duration || 0) / 60)} 分，靜音正常速度實播）`);
-        await startPlay(); await sleep(1200);
-        if ((vEl()?.paused) || (vEl()?.currentTime || 0) < 0.3) { await startPlay(); await sleep(1200); }
-        if ((vEl()?.paused) || (vEl()?.currentTime || 0) < 0.3) note('  ⚠️ 影片未能自動起播；請保持此分頁在前景，或在播放器按一次播放，之後自動接續。');
-        let last = vEl()?.currentTime || 0, lastAdvance = Date.now(), gone = 0;
-        while (true) {
-          stopped(); ensureCourse(); await foreground('觀看影片');
-          const video = vEl();
-          if (!video) { if (++gone > 12) { note('  找不到播放器（內容可能已切換），結束本章監看。'); break; } await sleep(1500); continue; }
-          gone = 0;
-          if (video.playbackRate !== 1) video.playbackRate = 1;
-          if (video.ended) break;
-          if (video.paused) await startPlay(); // 被暫停（含元素替換後）就重新靜音起播
-          const t = video.currentTime;
-          if (t < last - 2) { last = t; lastAdvance = Date.now(); } // 元素被替換、進度歸零：視為新起點，不誤判卡住
-          else if (t > last + 0.1) { last = t; lastAdvance = Date.now(); }
-          if (Date.now() - lastAdvance > 180000) { note('  影片超過 3 分鐘未前進（暫停或緩衝），略過此章。'); return false; }
-          await sleep(1500);
-        }
-      } else {
-        const pages = (() => { const t = (document.querySelector('[class*="numPages"], .toolbarLabel')?.textContent || '').replace(/[^0-9]/g, ''); return parseInt(t) || 1; })();
-        const nextBtn = () => [...document.querySelectorAll('button')].find(b => /下一頁|next/i.test(b.getAttribute('aria-label') || b.title || '') && !b.disabled && b.offsetParent);
-        for (let pg = 0; pg < pages + 1; pg++) {
-          stopped(); ensureCourse(); await foreground('閱讀文件');
-          note(`  閱讀「${name}」：第 ${Math.min(pg + 1, pages)}/${pages} 頁`);
-          await sleep(9000);
-          const nb = nextBtn(); if (nb) { nb.click(); await sleep(800); } else break;
-        }
-      }
-      return await waitCompleted(name, 120000);
-    };
-    const totalTops = [...document.querySelectorAll('mat-expansion-panel-header.course-node')].length;
-    const skipped = [];
-    for (let idx = 0; idx < totalTops; idx++) {
+  const nestedRowSelector = 'li.syllabus__list-item';
+  const taskButtons = 'button,a,[role="button"]';
+  const surveyEntry = /^(開始填寫|填寫問卷|開始問卷)$/;
+  const retakeEntry = /^(重新測驗|再次測驗|重做測驗|重考|再測一次|重新作答|再次作答|繼續測驗|繼續作答)$/;
+  const quizEntry = /^(進入測驗|開始測驗)$/;
+  const quizReview = /^(觀看答案|查看答案|檢視答案|查看作答結果|觀看解析)$/;
+  const quizScore = /(\d+(?:\.\d+)?)\s*pt\s*[\/／]\s*\d+(?:\.\d+)?\s*pt\b/i;
+
+  function taskControl(pattern) {
+    const matches = el => visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' &&
+      pattern.test(cleanText(el.textContent));
+    return [...(taskCover()?.querySelectorAll(taskButtons) || [])].find(matches) ||
+      [...document.querySelectorAll(taskButtons)].find(matches);
+  }
+  const quizAction = () => taskControl(quizEntry) || taskControl(retakeEntry);
+
+  const nestedHeaders = () => [...document.querySelectorAll('mat-expansion-panel-header.course-node')]
+    .filter(header => visible(header) && header.closest('mat-expansion-panel'));
+  const nestedRows = header => {
+    const panel = header.closest('mat-expansion-panel');
+    return [...panel.querySelectorAll(nestedRowSelector)].filter(row =>
+      row.closest('mat-expansion-panel') === panel && visible(row));
+  };
+  const nestedTitle = row => cleanText(row.querySelector('.course-node__title, [class*="title"]')?.textContent || row.textContent)
+    .replace(/(?:\s*(?:未測驗|尚未測驗|未通過|不合格|未合格|已通過|測驗通過|測驗合格|未填寫|已填寫|未提交|已提交|已完成觀看|觀看完成|已觀看|已完成|未完成|\d+(?:\.\d+)?\s*%|\d+(?:\.\d+)?\s*pt\s*[\/／]\s*\d+(?:\.\d+)?\s*pt))+$/i, '').trim();
+  const nestedSelected = row => [row, rowLink(row)].some(el =>
+    el.matches('.--active, .--selected, .--current, .active, .selected, [aria-selected="true"], [aria-current="true"], [aria-current="page"]'));
+  const currentNestedRows = () => nestedHeaders().flatMap(nestedRows).filter(nestedSelected);
+
+  function nestedItemRow(item) {
+    const header = nestedHeaders()[item.panelIndex];
+    if (!header || nestedTitle(header) !== item.unitTitle) return null;
+    const row = item.rowIndex === -1 ? header : nestedRows(header)[item.rowIndex];
+    return row && nestedTitle(row) === item.title ? row : null;
+  }
+
+  function assertNestedSelection(item) {
+    stopped(); ensureCourse();
+    const row = nestedItemRow(item);
+    const selected = currentNestedRows();
+    if (!row || selected.some(other => other !== row) || (item.rowIndex !== -1 && !nestedSelected(row))) {
+      throw new Error('章節選取已變更，請核對目前畫面後再接續。');
+    }
+    return row;
+  }
+
+  function nestedEvidence(row) {
+    const labels = [row, ...row.querySelectorAll('[title],[aria-label]')].map(el =>
+      `${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''}`);
+    return cleanText([row.textContent, ...labels].join(' '));
+  }
+
+  function nestedRecorded(row, kind, cover = null) {
+    const evidence = nestedEvidence(row);
+    if (kind === 'quiz') {
+      const result = cleanText(cover?.textContent);
+      const combined = `${evidence} ${result}`.trim();
+      if (/未測驗|未通過|未合格|不合格/.test(combined)) return false;
+      if (/^(通過|合格)$|已通過|測驗通過|測驗合格/.test(combined)) return true;
+      // 分數列右側可能是滿分。只採用畫面明確標示的及格門檻。
+      const score = result.match(quizScore) || evidence.match(quizScore);
+      const threshold = combined.match(/(?:及格分數|及格標準|通過門檻|通過標準)\s*[：:]?\s*(\d+(?:\.\d+)?)(?![\d.])/);
+      return !!score && !!threshold && Number(score[1]) >= Number(threshold[1]);
+    }
+    if (kind === 'survey') {
+      if (/未填寫|未提交|未送出|未完成/.test(evidence)) return false;
+      return row.classList.contains('--completed') || /已填寫|已提交|已送出|已完成問卷/.test(evidence);
+    }
+    return row.classList.contains('--completed') || videoRecorded(evidence);
+  }
+
+  const youtubeFrame = () => [...document.querySelectorAll('iframe[src]')].find(frame =>
+    visible(frame) && /^https?:\/\/(?:[\w-]+\.)?(?:youtube(?:-nocookie)?\.com|youtu\.be)(?:[/:]|$)/i.test(frame.src));
+  const pdfViewer = () => documents().flatMap(doc =>
+    [...doc.querySelectorAll('.toolbarField.pageNumber, #pageNumber, .pdfViewer .page')]).find(visible);
+
+  function nestedContent(item, row) {
+    const cover = taskCover();
+    const q = question();
+    const coverText = cleanText(cover?.textContent);
+    const survey = taskControl(surveyEntry) || /問卷|調查/.test(coverText) && cover;
+    const quizPage = quizAction() || taskControl(quizReview) ||
+      (cover && /測驗|考試|評量|及格/i.test(coverText)) || quizScore.test(coverText);
+    if (survey || quizPage || q) {
+      const kind = survey || (!quizPage && /問卷|調查/.test(nestedEvidence(row))) ? 'survey' : 'quiz';
+      const node = cover || q?.wrap || survey || quizPage;
+      return { kind, node, signature: taskSnapshot() || cleanText(node.textContent), matches: taskMatchesItem(item) };
+    }
+    const video = videoElement();
+    if (video && (video.readyState >= 1 || videoSource(video))) {
+      return { kind: 'video', node: video, signature: videoSource(video), matches: sourceMatchesItem(video, item) };
+    }
+    const frame = youtubeFrame();
+    if (frame) return { kind: 'youtube', node: frame, signature: frame.src };
+    const pdf = pdfViewer();
+    if (pdf) {
+      const frame = pdf.ownerDocument.defaultView.frameElement;
+      return { kind: 'pdf', node: frame || pdf, signature: frame?.src || pdf.ownerDocument.URL };
+    }
+    return null;
+  }
+
+  async function openNestedItem(item) {
+    await platformReady();
+    const row = nestedItemRow(item);
+    if (!row) throw new Error('章節已從課綱移除或改名，請重新掃描。');
+    const previous = nestedContent(item, row);
+    const keepCurrent = nestedSelected(row) &&
+      (item.rowIndex !== -1 || previous?.matches === true) && previous?.matches !== false;
+    if (!keepCurrent) {
+      const target = rowLink(row);
       stopped(); ensureCourse();
-      let hs = [...document.querySelectorAll('mat-expansion-panel-header.course-node')];
-      const h = hs[idx]; if (!h) continue;
-      const topText = cleanText(h.textContent).slice(0, 24);
-      // 測驗／問卷：沿用既有 openItem + quiz（知識測驗仍需 API Key）
-      if (/測驗|測試|考試|評量|問卷|調查/.test(topText)) {
-        const item = roster().find(e => e.type === 'quiz' || e.type === 'survey');
-        if (!item) { note(`  ⚠️ 找不到測驗項目「${topText}」，略過。`); continue; }
-        if (taskRecorded(roster().find(e => itemMatches(e, item)) || item)) { note(`  平台已完成，略過：${item.title}`); continue; }
-        try { await openItem(item); await quiz(item, settings); }
-        catch (e) { if (e.name === 'AbortError' || /已離開原課程|已返回首頁/.test(e.message || '')) throw e; skipped.push(`${topText}：${e.message}`); note(`  ⏭ 跳過測驗「${topText}」：${e.message}`); try { await returnToRoster(); } catch { } }
-        continue;
+      target.scrollIntoView({ block: 'center' });
+      target.click();
+    }
+    let candidate = null, stableSince = 0;
+    return waitFor(() => {
+      const current = nestedItemRow(item);
+      const selected = currentNestedRows();
+      const content = current && nestedContent(item, current);
+      if (!content || content.matches === false || selected.some(other => other !== current) ||
+          (item.rowIndex !== -1 && !nestedSelected(current))) {
+        candidate = null;
+        return false;
       }
-      // 內容單元：展開；有子章節就逐一讀，否則 header 本身即一份 PDF（如 1-0）
-      await expandHeader(idx);
-      const subsNow = () => [...document.querySelectorAll('li.syllabus__list-item')].filter(el => el.offsetParent);
-      if (subsNow().length) {
-        let guard = 0;
-        while (guard++ < 40) {
-          stopped(); ensureCourse();
-          await expandHeader(idx);
-          const li = subsNow().find(el => !/--completed/.test(el.className) && !docDone.has(cleanText(el.textContent).slice(0, 30)));
-          if (!li) break;
-          const name = cleanText(li.textContent).slice(0, 30);
-          note(`開啟子章節：${name}`);
-          const target = li.querySelector('a,button,[role="button"]') || li;
-          target.scrollIntoView({ block: 'center' }); await sleep(500); target.click();
-          const ok = await handleSub(name);
-          docDone.add(name);
-          if (!ok) skipped.push(name);
+      const changed = !previous || content.node !== previous.node ||
+        content.kind !== previous.kind || content.signature !== previous.signature;
+      if (!keepCurrent && content.matches !== true && !changed) {
+        candidate = null;
+        return false;
+      }
+      if (!candidate || content.kind !== candidate.kind || content.node !== candidate.node ||
+          content.signature !== candidate.signature) {
+        candidate = content;
+        stableSince = Date.now();
+        return false;
+      }
+      return Date.now() - stableSince >= 600 && content;
+    }, 25000, '無法確認這個章節的內容已載入。');
+  }
+
+  async function waitNestedRecorded(item, capMs) {
+    const deadline = Date.now() + capMs;
+    while (Date.now() < deadline) {
+      await foreground('等待平台標記完成');
+      if (nestedRecorded(assertNestedSelection(item), item.type)) {
+        note(`平台已標記完成：${item.title}`);
+        return true;
+      }
+      await sleep(4000);
+    }
+    return false;
+  }
+
+  async function handleNestedMedia(item, content) {
+    const name = item.title;
+    if (item.type === 'youtube') {
+      const frame = content.node;
+      const url = new URL(frame.src);
+      if (url.searchParams.get('mute') !== '1' || url.searchParams.get('autoplay') !== '1') {
+        url.searchParams.set('autoplay', '1');
+        url.searchParams.set('mute', '1');
+        frame.src = url.href;
+      }
+      note(`YouTube 影片：${name}，等待平台認列。`);
+      return waitNestedRecorded(item, 18 * 60000);
+    }
+    if (item.type === 'video') {
+      note(`觀看影片：${name}`);
+      let lastVideo, lastTime = 0, lastAdvance = Date.now(), lastPlay = 0;
+      while (Date.now() - lastAdvance < 180000) {
+        await foreground('觀看影片');
+        assertNestedSelection(item);
+        const video = videoElement();
+        if (video && sourceMatchesItem(video, item) !== false) {
+          if (video.ended) return waitNestedRecorded(item, 120000);
+          if (video.error) throw new Error(`播放器錯誤：${video.error.code}`);
+          if (video.playbackRate !== 1) video.playbackRate = 1;
+          if (video.paused && !blockingDialog() && Date.now() - lastPlay > 3000) {
+            lastPlay = Date.now();
+            const player = video.closest('vm-player') || document.querySelector('vm-player');
+            video.muted = true;
+            if (player) player.muted = true;
+            try {
+              await settlePlayback(typeof player?.play === 'function' ? player.play() : video.play());
+            } catch {
+              stopped();
+            }
+          }
+          if (video !== lastVideo || video.currentTime > lastTime + 0.1 || video.currentTime < lastTime - 2) {
+            lastAdvance = Date.now();
+            lastTime = video.currentTime;
+            lastVideo = video;
+          }
         }
-      } else if (!docDone.has(topText)) {
-        note(`開啟：${topText}`);
-        h.scrollIntoView({ block: 'center' }); await sleep(500); h.click();
-        await handleSub(topText);
-        docDone.add(topText);
+        await sleep(1500);
+      }
+      return false;
+    }
+    const viewerDocument = pdfViewer()?.ownerDocument;
+    if (!viewerDocument) throw new Error('PDF 閱讀器已關閉。');
+    const countText = viewerDocument.querySelector('#numPages, [class*="numPages"], .toolbarLabel')?.textContent;
+    const pages = Number(countText?.trim().match(/\d+$/)?.[0]) || 1;
+    for (let page = 0; page < pages; page++) {
+      await foreground('閱讀文件');
+      assertNestedSelection(item);
+      note(`閱讀「${name}」：${page + 1} / ${pages} 頁`);
+      await sleep(9000);
+      assertNestedSelection(item);
+      if (page + 1 >= pages) break;
+      const next = [...viewerDocument.querySelectorAll('button')].find(button => visible(button) && !button.disabled &&
+        (button.matches('#next, #nextButton, [data-l10n-id="pdfjs-next-button"]') ||
+          /^(下一頁|next(?: page)?)(?:\s*\(.*\))?$/i.test(cleanText(button.getAttribute('aria-label') || button.title))));
+      if (!next) break;
+      next.click();
+      await sleep(800);
+    }
+    return waitNestedRecorded(item, 120000);
+  }
+
+  async function runDocument(settings, resume) {
+    note('逐項辨識巢狀課程內容。');
+    const units = nestedHeaders().map((header, panelIndex) => ({ panelIndex, unitTitle: nestedTitle(header) }));
+    const selected = currentNestedRows();
+    const resumeHeader = resume && selected.length === 1
+      ? selected[0].closest('mat-expansion-panel')?.querySelector('mat-expansion-panel-header.course-node')
+      : null;
+    const resumePanel = nestedHeaders().indexOf(resumeHeader);
+    const resumeRow = resumePanel >= 0 ? nestedRows(resumeHeader).indexOf(selected[0]) : -1;
+    const fromMiddle = resumePanel > 0 || resumeRow > 0;
+    const pending = [];
+    let checked = 0;
+
+    for (const unit of units.slice(Math.max(0, resumePanel))) {
+      await platformReady();
+      const header = nestedHeaders()[unit.panelIndex];
+      if (!header || nestedTitle(header) !== unit.unitTitle) throw new Error('課綱順序已變更，請重新掃描。');
+      const panel = header.closest('mat-expansion-panel');
+      if (!panel.classList.contains('mat-expanded') && header.getAttribute('aria-expanded') !== 'true') {
+        header.click();
+        await sleep(700);
+        ensureCourse();
+      }
+      const children = nestedRows(header).map((row, rowIndex) => ({ row, rowIndex }));
+      const entries = children.length ? children : [{ row: header, rowIndex: -1 }];
+      for (const { row, rowIndex } of entries.slice(unit.panelIndex === resumePanel ? Math.max(0, resumeRow) : 0)) {
+        const title = nestedTitle(row);
+        const item = { ...unit, rowIndex, title, key: `nested:${unit.panelIndex}:${rowIndex}:${title}`, nested: true };
+        phase = 'switching';
+        note(`檢查章節：${title}`);
+        try {
+          const content = await openNestedItem(item);
+          item.type = content.kind;
+          const current = assertNestedSelection(item);
+          if (nestedRecorded(current, item.type, content.matches === true ? taskCover() : null)) {
+            checked++;
+            note(`平台已確認完成：${title}`);
+          } else if (item.type === 'quiz' || item.type === 'survey') {
+            activeItemKey = item.key;
+            await quiz(item, settings);
+            checked++;
+          } else if (await handleNestedMedia(item, content)) {
+            checked++;
+          } else {
+            pending.push(`${title}：平台完成狀態待確認。`);
+          }
+        } catch (error) {
+          if (error.name === 'AbortError' || /已離開原課程|已返回首頁|章節選取已變更/.test(error.message)) throw error;
+          if (item.type === 'quiz' || item.type === 'survey') {
+            note(`停在「${title}」：${error.message}`);
+            return false;
+          }
+          pending.push(`${title}：${error.message}`);
+        } finally {
+          activeItemKey = null;
+        }
       }
     }
-    if (skipped.length) { note(`⚠️ 有 ${skipped.length} 項未自動完成，需自行處理：`); skipped.forEach(x => note(`　• ${x}`)); }
-    note('文件/巢狀課程處理完畢。閱讀時數與認證以平台為準，請自行核對；這不代表已取得證書。');
+
+    pending.forEach(message => note(message));
+    if (pending.length || fromMiddle || !checked) {
+      const earlier = fromMiddle ? '，本次從目前章節接續' : '';
+      note(`保留課程頁：已確認 ${checked} 項，待確認 ${pending.length} 項${earlier}。可在「診斷與記錄」查看。`);
+      return false;
+    }
+    return true;
   }
 
   async function run(userRequested = false) {
     if (running || scanning) return;
-    requestInitialPlayback(userRequested);
+    const nestedCourse = nestedHeaders().some(header => {
+      const panel = header.closest('mat-expansion-panel');
+      return panel.querySelector(nestedRowSelector + ', .syllabus__list');
+    });
+    if (!nestedCourse) requestInitialPlayback(userRequested);
     if (!queue.length) await scan();
-    if (!queue.length) return;
+    if (!queue.length && !nestedCourse) return;
     const settings = { ai: $('ai').checked, submit: $('submit').checked, engine: $('engine').value, model: $('model').value.trim(), key: $('key').value.trim() };
     running = true; controller = new AbortController();
     verifiedItem = null; activeItemKey = null;
     phase = 'starting';
     const thisGeneration = ++generation;
-    const currentVideo = videoElement();
-    const currentEntries = roster();
-    const selectedEntries = currentEntries.filter(entry => rowSelected(entry.row));
-    const selectedKey = selectedEntries.length === 1 ? selectedEntries[0].key : null;
-    const resumeIndex = $('resume').checked ? queue.findIndex(item => currentVideo ? (sourceMatchesItem(currentVideo, item) === true || (sourceMatchesItem(currentVideo, item) === null && item.key === selectedKey)) : (taskMatchesItem(item) === true || (taskMatchesItem(item) === null && item.key === selectedKey))) : -1;
-    const startIndex = Math.max(0, resumeIndex);
     renderQueue();
     root.querySelector('[data-action="run"]').disabled = true;
     try {
       ensureCourse();
       await foreground('開始處理');
-      // v9.16：文件/巢狀課程（含子章節 LI）→ 走獨立的文件模式，不影響影片/測驗課程。
-      if (document.querySelector('li.syllabus__list-item')) {
-        await runDocument(settings);
-        try { if (/^#\/learning\/[^/?]+/.test(location.hash)) { location.hash = '#/course/my-learning'; await new Promise(r => setTimeout(r, 2000)); } note('已自動回到「我修的課」目錄（避免閒置扣時）。可按「▶ 進入下一門勾選的課」繼續下一門。'); } catch { }
+      if (nestedCourse) {
+        if (await runDocument(settings, $('resume').checked)) {
+          stopped(); ensureCourse();
+          location.hash = '#/course/my-learning';
+          note('本次已逐項核對平台完成標記，已回到「我修的課」。');
+        }
         return;
       }
+      const currentVideo = videoElement();
+      const selectedEntries = roster().filter(entry => rowSelected(entry.row));
+      const selectedKey = selectedEntries.length === 1 ? selectedEntries[0].key : null;
+      const resumeIndex = $('resume').checked ? queue.findIndex(item => currentVideo ? (sourceMatchesItem(currentVideo, item) === true || (sourceMatchesItem(currentVideo, item) === null && item.key === selectedKey)) : (taskMatchesItem(item) === true || (taskMatchesItem(item) === null && item.key === selectedKey))) : -1;
+      const startIndex = Math.max(0, resumeIndex);
       if (startIndex > 0) note(`從目前章節「${queue[startIndex].title}」接續；前面章節未因此標記完成，請自行核對平台紀錄。`);
       const skippedItems = [];
       for (const item of queue.slice(startIndex)) {
@@ -1045,7 +1222,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.22', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.23', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1062,7 +1239,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.22-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
