@@ -1,6 +1,6 @@
 // 研習救星｜供既有 Chrome 書籤載入的選擇介面。
 // 兩個課程助手各自維護於 moocs.js 和 specialedu.js。
-(() => {
+((startSpecialEdu) => {
   'use strict';
 
   const panelId = 'training-rescuer-launcher';
@@ -45,15 +45,24 @@
 
   const matchesCourse = module => location.origin === module.origin && module.course.test(location.hash);
 
+  function showLink(message, href, label) {
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = label;
+    status.replaceChildren(`${message} `, link);
+  }
+
   async function launch(module) {
     if (loading) return;
     if (!matchesCourse(module)) {
-      const link = document.createElement('a');
-      link.href = module.entry;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.textContent = '開啟平台';
-      status.replaceChildren(`${module.instruction} `, link);
+      showLink(module.instruction, module.entry, '開啟平台');
+      return;
+    }
+    const useSpecialEdu = module.file === 'specialedu.js';
+    if (useSpecialEdu && !startSpecialEdu) {
+      showLink('特教平台限制課程頁的外部連線，請改用新版書籤。', pages, '取得新版書籤');
       return;
     }
 
@@ -61,14 +70,18 @@
     for (const button of choices.children) button.disabled = true;
     status.textContent = `正在載入${module.name}助手…`;
     try {
-      const url = new URL(module.file, pages);
-      url.searchParams.set('v', String(Date.now()));
-      const response = await fetch(url.href, { cache: 'no-store', signal: lifecycle.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const script = await response.text();
-      if (lifecycle.signal.aborted) return;
-      if (!matchesCourse(module)) throw new Error('已離開課程學習頁');
-      (0, eval)(script);
+      if (useSpecialEdu) {
+        startSpecialEdu();
+      } else {
+        const url = new URL(module.file, pages);
+        url.searchParams.set('v', String(Date.now()));
+        const response = await fetch(url.href, { cache: 'no-store', signal: lifecycle.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const script = await response.text();
+        if (lifecycle.signal.aborted) return;
+        if (!matchesCourse(module)) throw new Error('已離開課程學習頁');
+        (0, eval)(script);
+      }
       dialog.close();
     } catch (error) {
       if (!lifecycle.signal.aborted) status.textContent = `無法載入${module.name}助手（${error.message}）`;
@@ -95,4 +108,4 @@
   });
   document.body.append(dialog);
   dialog.showModal();
-})();
+})(/* bookmarklet-specialedu */ null);
