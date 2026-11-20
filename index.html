@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>研習救星｜Chrome 書籤</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.6 system-ui, sans-serif; color: #172b48; background: #edf3fa; }
+    body { margin: 0; padding: 28px 16px; }
+    main { box-sizing: border-box; max-width: 560px; margin: 8vh auto; padding: clamp(20px, 5vw, 36px); background: white; border: 1px solid #d1deed; border-radius: 18px; }
+    h1 { margin: 0 0 16px; font-size: 1.85rem; line-height: 1.2; }
+    ol { padding-inline-start: 1.45em; }
+    li + li { margin-top: 4px; }
+    button { border: 0; border-radius: 9px; padding: 9px 16px; color: white; background: #254d84; font: inherit; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: default; }
+    :focus-visible { outline: 3px solid #638bd0; outline-offset: 3px; }
+    [role="status"] { min-height: 1.6em; color: #325178; }
+    textarea { box-sizing: border-box; width: 100%; border: 1px solid #c7d3e3; border-radius: 8px; padding: 8px; font: .875rem/1.4 ui-monospace, monospace; }
+    .updates { margin-bottom: 0; color: #455c78; font-size: .92rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>研習救星</h1>
+    <ol>
+      <li>按「複製書籤網址」。</li>
+      <li>編輯 Chrome 的「研習救星」書籤，將「網址」欄整段取代。</li>
+      <li>回到課程學習頁，點書籤後選擇平台。</li>
+    </ol>
+    <button type="button" id="copy" disabled>複製書籤網址</button>
+    <p role="status">正在準備書籤…</p>
+    <textarea id="bookmark-url" aria-label="書籤網址" rows="5" readonly hidden></textarea>
+    <p class="updates">磨課師會讀取最新發布的版本。特教助手更新後，請回到此頁重新複製書籤網址。</p>
+  </main>
+  <script>
+    'use strict';
+
+    const button = document.querySelector('#copy');
+    const status = document.querySelector('[role="status"]');
+    const field = document.querySelector('#bookmark-url');
+    const marker = '/* bookmarklet-specialedu */ null';
+
+    async function readFile(name) {
+      const response = await fetch(name, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`${name} 回傳 HTTP ${response.status}`);
+      return response.text();
+    }
+
+    async function prepare() {
+      const [launcher, specialEdu] = await Promise.all([readFile('moocs_v9.4.js'), readFile('specialedu.js')]);
+      if (!launcher.includes(marker)) throw new Error('選單檔案仍在更新，請稍後重新整理');
+      if (!specialEdu.includes('specialedu-10000337-helper')) throw new Error('特教助手檔案無法辨識');
+      const program = launcher.replace(marker, () => `() => {\n${specialEdu}\n}`);
+      field.value = `javascript:${encodeURIComponent(`void (${program.trim().replace(/;$/, '')})`)}`;
+      button.disabled = false;
+      status.textContent = '';
+    }
+
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(field.value);
+        status.textContent = '已複製。請貼到 Chrome 書籤的「網址」欄。';
+      } catch {
+        field.hidden = false;
+        field.select();
+        status.textContent = '請複製下方已選取的書籤網址。';
+      }
+    });
+
+    prepare().catch(error => { status.textContent = `無法準備書籤（${error.message}）。`; });
+  </script>
+</body>
+</html>
