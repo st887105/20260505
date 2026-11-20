@@ -1,5 +1,5 @@
 // 教育部特殊教育專業發展數位課程平臺｜普特合作（教師篇）
-// GitHub Pages 版 v1.0.0｜在本課程學習頁點擊對應的 Chrome 書籤。
+// GitHub Pages 版 v1.0.1｜在本課程學習頁點擊對應的 Chrome 書籤。
 // 在面板選擇「從講義開始」或「播放／接續」。影片由平台播放器原速播放。
 (() => {
   'use strict';
@@ -82,8 +82,7 @@
   async function waitForPdf(title, signal) {
     let previous = '';
     let stableSince = 0;
-    const deadline = Date.now() + 25000;
-    while (Date.now() < deadline) {
+    for (let remaining = 25000; remaining > 0; remaining -= 200) {
       await waitUntilVisible(signal);
       if (selected() !== title) throw new Error('所選講義已變更。');
       const info = pdfInfo();
@@ -137,8 +136,7 @@
     const switching = selected() !== title;
     choose(title);
 
-    const deadline = Date.now() + 20000;
-    while (Date.now() < deadline) {
+    for (let remaining = 20000; remaining > 0; remaining -= 300) {
       await waitUntilVisible(signal);
       const video = movie();
       const source = video?.getAttribute('src');
@@ -152,23 +150,63 @@
   async function watch(title, video, signal) {
     const source = video.getAttribute('src');
     if (video.playbackRate !== 1 || video.seeking) throw new Error('請將播放器恢復為 1 倍速並停止跳轉。');
-    if (video.paused && !video.ended) {
-      const control = playControl();
-      if (visible(control) && !control.disabled) control.click();
+    let userPaused = false;
+    let attempts = 0;
+    let lastAttempt = -Infinity;
+    let lastPosition = video.currentTime;
+
+    function trackPlayerInput(event) {
+      if (!event.isTrusted || !event.target.closest('ui-video-player.learning-video')) return;
+      const control = event.target.closest('button, video, .tv-player__play-button--big');
+      if (control && control !== playControl() && !control.matches('video, .tv-player__play-button--big')) return;
+      if (event.type === 'keydown' && ![' ', 'Enter', 'k', 'K'].includes(event.key)) return;
+      if (event.type === 'click' && !control) return;
+      userPaused = movie()?.paused === false;
+      if (userPaused) note('已手動暫停。按播放器的播放鍵後會接續。');
     }
 
-    while (true) {
-      await waitUntilVisible(signal);
-      if (selected() !== title || movie()?.getAttribute('src') !== source) {
-        throw new Error('所選章節或播放器已變更，請從目前章節接續。');
+    const listeners = { capture: true, signal };
+    document.addEventListener('click', trackPlayerInput, listeners);
+    document.addEventListener('keydown', trackPlayerInput, listeners);
+    try {
+      while (true) {
+        await waitUntilVisible(signal);
+        if (selected() !== title) throw new Error('所選章節已變更，請從目前章節接續。');
+        video = movie();
+        const currentSource = video?.getAttribute('src');
+        if (!currentSource) {
+          note(`${title}，等待原播放器重新載入。`);
+          await delay(signal);
+          continue;
+        }
+        if (currentSource !== source) throw new Error('影片來源已變更，請從目前章節接續。');
+        if (video.error) throw new Error(`「${title}」的播放器發生錯誤。`);
+        if (video.playbackRate !== 1 || video.seeking) throw new Error('偵測到變速或跳轉，已停止換章。');
+        if (video.ended) return;
+
+        if (!video.paused && video.currentTime > lastPosition + 0.2) {
+          attempts = 0;
+          userPaused = false;
+        }
+        lastPosition = video.currentTime;
+        const time = `${Math.floor(lastPosition / 60)}:${String(Math.floor(lastPosition % 60)).padStart(2, '0')}`;
+        let message = `${title} ${time}`;
+        if (video.paused) {
+          message += '，已暫停。可按播放器的播放鍵接續。';
+          const control = playControl();
+          if (!userPaused && attempts < 3 && Date.now() - lastAttempt >= 5000 && video.readyState >= 2 && visible(control) && !control.disabled) {
+            lastAttempt = Date.now();
+            attempts++;
+            control.click();
+            message = `${title} ${time}，已提出續播請求（${attempts}/3）。`;
+          }
+        }
+        note(message);
+        await delay(signal);
       }
-      video = movie();
-      if (video.error) throw new Error(`「${title}」的播放器發生錯誤。`);
-      if (video.playbackRate !== 1 || video.seeking) throw new Error('偵測到變速或跳轉，已停止換章。');
-      const time = `${Math.floor(video.currentTime / 60)}:${String(Math.floor(video.currentTime % 60)).padStart(2, '0')}`;
-      if (video.ended) return;
-      note(`${title} ${time}${video.paused ? '，已暫停。請按播放器的播放鍵。' : ''}`);
-      await delay(signal);
+    } finally {
+      document.removeEventListener('click', trackPlayerInput, true);
+      document.removeEventListener('keydown', trackPlayerInput, true);
     }
   }
 
