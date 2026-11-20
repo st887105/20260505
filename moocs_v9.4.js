@@ -1,4 +1,4 @@
-// MOOCS v9.23.2 — 解析 AI 回覆中的 JSON 程式碼區塊。
+// MOOCS v9.23.3 — 巢狀測驗確認繳交後接續下一章。
 // 由使用者提供的 v9.8 原始檔修改；v9.11 依登入後的真實 DOM 與播放記錄修正。
 // 完整課程認列仍須由使用者核對，實測範圍見隨附觀察報告。
 // 僅操作既有頁面與正常播放器；不偽造可見狀態、學習紀錄或閒置訊號。
@@ -22,7 +22,7 @@
   root.style.cssText = 'position:fixed;left:16px;top:100px;width:390px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);box-sizing:border-box;overflow:auto;z-index:2147483647;background:#151925;color:#eef2ff;border:1px solid #64748b;border-radius:12px;font:13px/1.5 system-ui;box-shadow:0 8px 30px #0008';
   root.innerHTML = `
     <div data-role="handle" tabindex="0" aria-label="拖曳視窗標題，或使用方向鍵移動" style="display:flex;align-items:center;gap:8px;justify-content:space-between;padding:12px;background:#26324b;cursor:move;touch-action:none;user-select:none;border-radius:12px 12px 0 0">
-      <strong>MOOCS v9.23.2 <small>拖曳此處移動</small></strong>
+      <strong>MOOCS v9.23.3 <small>拖曳此處移動</small></strong>
       <span style="display:flex;gap:4px"><button data-action="collapse" aria-expanded="true">縮合</button><button data-action="close" aria-label="關閉視窗">✕</button></span>
     </div><div data-role="body" style="padding:12px">
     <p>自動辨識影片、測驗及問卷。主觀問卷依你的指定選第一項。</p>
@@ -752,6 +752,7 @@
       const row = assertNestedSelection(item);
       const cover = taskMatchesItem(item) === true ? taskCover() : null;
       if (nestedRecorded(row, item.type, cover)) return true;
+      if (item.type === 'quiz') return false;
     } else if (taskRecorded(roster().find(entry => itemMatches(entry, item)))) return true;
     if (item.type === 'quiz') return !!confirmedResult();
     return [...document.querySelectorAll('[role="dialog"], [class*="result"], [class*="success"], [class*="survey"], [class*="questionnaire"]')]
@@ -852,8 +853,8 @@
         const button = dialog && [...dialog.querySelectorAll('button')].find(el => visible(el) && !el.disabled && /^(確定|確認|送出|繳交|提交)$/.test(el.innerText.trim()));
         if (button && !confirmed && !document.hidden) { assertActive(item); button.click(); confirmed = true; }
         return false;
-      }, 25000, '已送出，但未看到明確通過／問卷完成結果。請查看平台提示；不自動重測。');
-      note(`平台顯示${item.type === 'survey' ? '問卷完成' : '測驗通過'}：${item.title}`);
+      }, 25000, item.nested ? '已點擊繳交，平台尚未顯示提交結果。請查看目前畫面。' : '已送出，但未看到明確通過／問卷完成結果。請查看平台提示；不自動重測。');
+      note(`平台顯示${item.type === 'survey' ? '問卷完成' : item.nested ? '測驗已繳交' : '測驗通過'}：${item.title}`);
       completedItems.add(item.key);
       if (!item.nested) await returnToRoster();
       return;
@@ -918,14 +919,13 @@
   function nestedRecorded(row, kind, cover = null) {
     const evidence = nestedEvidence(row);
     if (kind === 'quiz') {
-      const result = cleanText(cover?.textContent);
-      const combined = `${evidence} ${result}`.trim();
-      if (/未測驗|未通過|未合格|不合格/.test(combined)) return false;
-      if (/^(通過|合格)$|已通過|測驗通過|測驗合格/.test(combined)) return true;
-      // 分數列右側可能是滿分。只採用畫面明確標示的及格門檻。
-      const score = result.match(quizScore) || evidence.match(quizScore);
-      const threshold = combined.match(/(?:及格分數|及格標準|通過門檻|通過標準)\s*[：:]?\s*(\d+(?:\.\d+)?)(?![\d.])/);
-      return !!score && !!threshold && Number(score[1]) >= Number(threshold[1]);
+      // 本次成績屬於已核對標題的結果頁，優先於尚未更新的課綱。
+      const score = cleanText(cover?.innerText || cover?.textContent);
+      if (/本次(?:成績|得分)\s*[：:]\s*\d+(?:\.\d+)?/.test(score)) return true;
+      if (/未測驗|未提交|未繳交/.test(evidence)) return false;
+      // 單一 60pt 是門檻。只有雙分數才表示已有提交紀錄。
+      return quizScore.test(cleanText(row.querySelector('.course-node__point')?.textContent)) ||
+        /已測驗|已繳交|已提交|測驗通過|測驗合格/.test(evidence);
     }
     if (kind === 'survey') {
       if (/未填寫|未提交|未送出|未完成/.test(evidence)) return false;
@@ -1110,16 +1110,18 @@
       const entries = children.length ? children : [{ row: header, rowIndex: -1 }];
       for (const { row, rowIndex } of entries.slice(unit.panelIndex === resumePanel ? Math.max(0, resumeRow) : 0)) {
         const title = nestedTitle(row);
-        const item = { ...unit, rowIndex, title, key: `nested:${unit.panelIndex}:${rowIndex}:${title}`, nested: true };
+        const item = { ...unit, rowIndex, title, key: `nested:${COURSE_HASH}:${unit.panelIndex}:${rowIndex}:${title}`, nested: true };
         phase = 'switching';
         note(`檢查章節：${title}`);
         try {
           const content = await openNestedItem(item);
           item.type = content.kind;
           const current = assertNestedSelection(item);
-          if (nestedRecorded(current, item.type, content.matches === true ? taskCover() : null)) {
+          if ((item.type === 'quiz' && completedItems.has(item.key)) ||
+              nestedRecorded(current, item.type, content.matches === true ? taskCover() : null)) {
             checked++;
-            note(`平台已確認完成：${title}`);
+            if (item.type === 'quiz') completedItems.add(item.key);
+            note(`${item.type === 'quiz' ? '測驗已有繳交紀錄' : '平台已確認完成'}：${title}`);
           } else if (item.type === 'quiz' || item.type === 'survey') {
             activeItemKey = item.key;
             await quiz(item, settings);
@@ -1228,7 +1230,7 @@
   }
   function diagnosticData() {
     return {
-      version: '9.23.2', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
+      version: '9.23.3', phase, running, lastHeartbeat: new Date(lastHeartbeat).toISOString(), lastExecutionGap, log: [...history],
       selectedItemKeys: roster().filter(entry => rowSelected(entry.row)).map(entry => entry.key),
       completionEvidence: roster().map(entry => ({ key: entry.key, evidence: completionEvidence(entry), icons: [...(entry.row.closest('mat-expansion-panel') || entry.row).querySelectorAll('mat-icon')].map(el => ({ text: cleanText(el.textContent), title: el.getAttribute('title'), label: el.getAttribute('aria-label') })) })), backgroundAllowed: $('background').checked, pageHidden: document.hidden,
       activeItemKey, verifiedSource: verifiedItem?.source || '',
@@ -1245,7 +1247,7 @@
   function diagnose() { note(JSON.stringify(diagnosticData(), null, 2)); root.querySelector('details:last-of-type').open = true; }
   function download() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticData(), null, 2)], { type: 'application/json;charset=utf-8' }));
-    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23.2-diagnostic.json';
+    const link = document.createElement('a'); link.href = url; link.download = 'moocs-v9.23.3-diagnostic.json';
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     note('已下載診斷。分享前請檢查章節標題及按鈕文字。');
   }
